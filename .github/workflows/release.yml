@@ -13,10 +13,29 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # Le tag vX.Y.Z doit correspondre à la version du Cargo.toml : sinon le
+  # binaire publié afficherait un autre numéro que celui de sa release.
+  version:
+    name: Version du tag
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Tag = version du Cargo.toml
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          if [ "v$version" != "$TAG" ]; then
+            echo "::error::Le tag $TAG ne correspond pas à la version $version du Cargo.toml"
+            exit 1
+          fi
   # Les tests sont ceux de test.yaml, réutilisés tels quels, sur les deux
   # machines qui compilent ensuite les binaires.
   tests:
     name: Tests
+    needs: Version
     strategy:
       matrix:
         runner: [ubuntu-22.04, ubuntu-22.04-arm]
