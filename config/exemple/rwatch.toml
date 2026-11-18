@@ -11,6 +11,11 @@
 # priorité sur cette valeur.
 # filter = "arp or ip or ip6"
 
+# Mode promiscuité en capture live : voir aussi les trames échangées entre
+# d'autres machines. Indispensable sur un point d'accès WiFi pour voir le
+# trafic direct entre deux stations (un attaquant et sa victime, par exemple).
+# promiscuous = true
+
 [rules]
 # Un fichier par règle, listés EXPLICITEMENT. Les chemins relatifs partent du
 # dossier de ce fichier. Un fichier listé mais absent arrête rwatch au

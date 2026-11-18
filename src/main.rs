@@ -128,8 +128,17 @@ fn run_cli() -> Result<(), Box<dyn Error>> {
             run(cap, engine, &args)
         }
         (None, Some(interface)) => {
-            eprintln!("[*] Écoute sur {interface} | filtre BPF : \"{filter}\"");
-            let cap = rnifler::capture::open_live(interface, &filter, 65535, 1000)?;
+            let mode = if config.capture.promiscuous {
+                " (mode promiscuité)"
+            } else {
+                ""
+            };
+            eprintln!("[*] Écoute sur {interface}{mode} | filtre BPF : \"{filter}\"");
+            // `LiveOptions` est `#[non_exhaustive]` : hors de rnifler, on part
+            // des réglages par défaut et on modifie le champ voulu.
+            let mut options = rnifler::capture::LiveOptions::default();
+            options.promiscuous = config.capture.promiscuous;
+            let cap = rnifler::capture::open_live_with(interface, &filter, options)?;
             run(cap, engine, &args)
         }
         // Impossible : clap exige --interface quand --read est absent.

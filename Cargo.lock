@@ -309,8 +309,8 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "rnifler"
-version = "1.1.0"
-source = "git+https://github.com/MkDriss/rnifler?tag=v1.1.0#7667fa059d2d427ab1f2d6ea2d02cdb4aed5786f"
+version = "1.2.0"
+source = "git+https://github.com/MkDriss/rnifler?tag=v1.2.0#586a75d9dd67bff3d8b192771d41213dc6e9e220"
 dependencies = [
  "clap",
  "etherparse",

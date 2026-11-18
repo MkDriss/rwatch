@@ -78,11 +78,27 @@ pub struct FileConfig {
 }
 
 /// Section `[capture]`.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct CaptureSection {
     /// Filtre BPF. Absent : celui de la ligne de commande, ou le défaut.
     pub filter: Option<String>,
+    /// Mode promiscuité en capture live : voir aussi les trames échangées
+    /// entre d'autres machines (entre deux stations WiFi, par exemple).
+    /// Activé par défaut : un IDS doit voir tout ce que son interface peut
+    /// lui montrer.
+    pub promiscuous: bool,
+}
+
+/// Écrit à la main (et non dérivé) : le défaut de `promiscuous` est `true`,
+/// alors que `#[derive(Default)]` donnerait `false`.
+impl Default for CaptureSection {
+    fn default() -> Self {
+        CaptureSection {
+            filter: None,
+            promiscuous: true,
+        }
+    }
 }
 
 /// Section `[rules]` du fichier principal : la liste des fichiers inclus,
@@ -431,6 +447,19 @@ mod tests {
             arp.trusted.get(&Ipv4Addr::new(192, 0, 2, 1)),
             Some(&MacAddr([0x00, 0x00, 0x5e, 0x00, 0x53, 0x01]))
         );
+    }
+
+    #[test]
+    fn le_mode_promiscuite_est_active_par_defaut() {
+        assert!(FileConfig::parse("").unwrap().capture.promiscuous);
+        assert!(
+            FileConfig::parse("[capture]\n")
+                .unwrap()
+                .capture
+                .promiscuous
+        );
+        let config = FileConfig::parse("[capture]\npromiscuous = false\n").unwrap();
+        assert!(!config.capture.promiscuous);
     }
 
     #[test]

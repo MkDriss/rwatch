@@ -16,6 +16,29 @@ conception : rwatch émet, ses consommateurs décident (dans le labo, l'IdP
 révoque l'identité de l'objet fautif), et un faux positif ne coupe jamais le
 réseau.
 
+### Positionnement du capteur
+
+Un IDS ne détecte que ce que son interface lui montre. Sur le labo (Raspberry
+Pi 4 en point d'accès WiFi, hostapd, `ap_isolate=0`), la validation en
+conditions réelles a montré que :
+
+- sans mode promiscuité, les trames échangées directement entre deux stations
+  (par exemple la réponse ARP usurpée d'un attaquant à sa victime) ne sont PAS
+  vues : seules le sont les trames adressées au Pi ou diffusées à tout le
+  réseau ;
+- avec le mode promiscuité, ces trames sont visibles.
+
+rwatch active donc ce mode par défaut (via `rnifler::capture::open_live_with`,
+ajoutée dans rnifler 1.2.0). Ce qu'un point d'accès laisse remonter dépend
+toutefois de son pilote et de son firmware : sur un autre matériel, la
+visibilité est à vérifier de la même façon (un ping entre deux stations,
+observé depuis le capteur avec `tcpdump` puis `tcpdump -p`).
+
+Avec `ap_isolate=1`, les stations ne peuvent plus échanger directement : la
+question de la visibilité disparaît, et l'empoisonnement ARP entre stations
+devient impossible au niveau 2 (une mesure de prévention, hors du rôle de
+rwatch).
+
 ### Moteur de détection
 
 - **Pas de contexte partagé entre les règles.** Chaque règle possède son propre

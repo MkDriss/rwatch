@@ -134,6 +134,15 @@ $ rwatch -i wlan0 >> alertes.jsonl    # alertes archivées, une par ligne
 | `-c, --count <N>` | S'arrête après N trames (défaut : 0, illimité) |
 | `-v, --verbose` | Affiche aussi chaque trame ARP et chaque SYN TCP, sur stderr |
 
+### Mode promiscuité
+
+En capture live, rwatch active par défaut le mode promiscuité : l'interface
+lui remonte aussi les trames échangées entre d'autres machines. C'est
+indispensable sur un point d'accès WiFi : sans ce mode, le trafic direct entre
+deux stations (un attaquant et sa victime) est invisible, comme l'a montré la
+validation sur le labo (voir [`docs/LIMITES.md`](docs/LIMITES.md)). Pour le
+désactiver : `promiscuous = false` dans la section `[capture]`.
+
 ### Privilèges
 
 Lire un fichier ne demande aucun privilège. Écouter une interface en demande :
