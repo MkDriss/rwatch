@@ -1,23 +1,9 @@
-# Exemple de configuration de rwatch.
-#
-#     rwatch --config rwatch.toml --interface wlan0
-#
-# Toutes les clés sont facultatives : une clé absente garde sa valeur par
-# défaut (celle indiquée en commentaire). Une clé inconnue, en revanche, est
-# une erreur : une faute de frappe ne passe jamais inaperçue.
+# ARP-001 : usurpation d'adresse par empoisonnement ARP.
 #
 # Les adresses ci-dessous sont des adresses réservées à la documentation
 # (192.0.2.0/24, RFC 5737 ; 00:00:5E:00:53:xx, RFC 9542) : remplacez-les par
 # celles de votre réseau.
 
-[capture]
-# Filtre BPF (syntaxe tcpdump). L'option --filter de la ligne de commande a
-# priorité sur cette valeur.
-# filter = "arp or ip or ip6"
-
-# ---------------------------------------------------------------------------
-# ARP-001 : usurpation d'adresse par empoisonnement ARP
-# ---------------------------------------------------------------------------
 [rules.arp_spoofing]
 # enabled = true
 

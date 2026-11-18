@@ -1,0 +1,22 @@
+# Exemple de configuration de rwatch : fichier principal.
+#
+#     rwatch --config /etc/rwatch/rwatch.toml --interface wlan0
+#
+# Toutes les clés sont facultatives : une clé absente garde sa valeur par
+# défaut (celle indiquée en commentaire). Une clé inconnue, en revanche, est
+# une erreur : une faute de frappe ne passe jamais inaperçue.
+
+[capture]
+# Filtre BPF (syntaxe tcpdump). L'option --filter de la ligne de commande a
+# priorité sur cette valeur.
+# filter = "arp or ip or ip6"
+
+[rules]
+# Un fichier par règle, listés EXPLICITEMENT. Les chemins relatifs partent du
+# dossier de ce fichier. Un fichier listé mais absent arrête rwatch au
+# démarrage ; une même règle ne peut être configurée que dans un seul fichier.
+# Pour désactiver une règle sans perdre sa configuration : `enabled = false`
+# dans son fichier. Une règle sans fichier tourne avec ses valeurs par défaut.
+files = [
+    "rules/arp_spoofing.toml",
+]

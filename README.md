@@ -66,9 +66,10 @@ désigne l'attaquant, retrouvé grâce à sa MAC, sans jamais accuser la victime
 - **Détection déterministe** : les règles ne lisent jamais l'horloge système,
   seulement l'horodatage de capture des paquets. Une capture rejouée donne
   toujours exactement les mêmes alertes.
-- **Configuration par fichier TOML**, validée au démarrage : une clé inconnue
-  ou une valeur incohérente arrête rwatch avec un message qui indique la ligne
-  en cause, avant toute écoute.
+- **Configuration par fichiers TOML** (un fichier par règle, listés
+  explicitement), validée au démarrage : une clé inconnue, une valeur
+  incohérente ou un fichier manquant arrête rwatch avec un message qui indique
+  le fichier et la ligne en cause, avant toute écoute.
 - **Mémoire bornée** : un attaquant ne peut pas saturer rwatch en inondant le
   réseau d'adresses différentes.
 
@@ -87,7 +88,7 @@ désigne l'attaquant, retrouvé grâce à sa MAC, sans jamais accuser la victime
 | `decode` | Classe chaque trame (ARP, segment TCP, autre) et extrait l'émetteur IPv4 ; TCP délégué à `rnifler::parser` |
 | `detect` | Le trait `Rule`, le moteur `Engine`, et les règles (`arp_spoof`) |
 | `alert` | La struct `Alert`, traduction Rust du contrat JSON |
-| `config` | Lecture et validation du fichier de configuration TOML |
+| `config` | Lecture, fusion et validation des fichiers de configuration TOML |
 
 Le paquet contient une bibliothèque (`src/lib.rs`, toute la logique) et un
 binaire (`src/main.rs`, l'interface en ligne de commande). La capture libpcap, le
@@ -149,18 +150,42 @@ groupe dédié.
 
 ## Configuration
 
-Toutes les clés sont facultatives ; le fichier
-[`config/rwatch.example.toml`](config/rwatch.example.toml) les documente une à
-une. Par exemple, pour déclarer la passerelle comme association de confiance et
-allonger la durée de vie des associations apprises :
+La configuration tient dans un fichier principal, et la configuration de
+chaque règle peut vivre dans son propre fichier, **listé explicitement** :
+
+```
+/etc/rwatch/
+├── rwatch.toml              # réglages globaux + liste des fichiers de règles
+└── rules/
+    └── arp_spoofing.toml    # réglages de la règle ARP-001
+```
 
 ```toml
+# rwatch.toml
+[rules]
+files = ["rules/arp_spoofing.toml"]
+```
+
+```toml
+# rules/arp_spoofing.toml
 [rules.arp_spoofing]
 binding_ttl_secs = 600
 
 [rules.arp_spoofing.trusted]
 "192.0.2.1" = "00:00:5e:00:53:01"
 ```
+
+L'exemple complet et commenté se trouve dans [`config/exemple/`](config/exemple/).
+Toutes les clés sont facultatives. Les règles de chargement, toutes vérifiées
+au démarrage :
+
+- les chemins relatifs partent du dossier du fichier principal ;
+- un fichier listé mais absent arrête rwatch : une configuration (et ses
+  associations de confiance) ne peut pas disparaître en silence ;
+- une même règle ne peut être configurée que dans un seul fichier ; un doublon
+  est signalé avec les deux fichiers en cause ;
+- un fichier de règle ne contient que des sections `[rules.*]`, et ne peut pas
+  en inclure d'autres.
 
 Une faute de frappe n'est jamais ignorée en silence :
 

@@ -47,12 +47,17 @@ réseau.
 
 ### Configuration
 
-- Le fichier est lu une seule fois, au démarrage : toute modification demande
-  de relancer rwatch (pas de rechargement à chaud).
-- Le fichier contient les associations de confiance : quiconque peut le
-  modifier peut désactiver la détection pour une adresse. En production, il
-  doit appartenir à root et n'être modifiable que par lui (à mettre en place
-  lors du déploiement sur le Pi).
+- Les fichiers sont lus une seule fois, au démarrage : toute modification
+  demande de relancer rwatch (pas de rechargement à chaud).
+- Les fichiers contiennent les associations de confiance : quiconque peut les
+  modifier peut désactiver la détection pour une adresse. En production, ils
+  doivent appartenir à root et n'être modifiables que par lui (à mettre en
+  place lors du déploiement sur le Pi).
+- Les fichiers de règles sont listés un par un (`[rules] files`) : pas de
+  motif du type `rules/*.toml`. C'est un choix (une règle ne peut ni
+  apparaître ni disparaître sans modification visible du fichier principal),
+  qui pourra être assoupli si rwatch accepte un jour des centaines de
+  signatures écrites par l'utilisateur.
 
 ### Décodage
 
@@ -78,8 +83,8 @@ faux positifs.
 
 1. ✅ Rafraîchir les associations ARP avec tout le trafic IPv4 (une machine
    active en TCP ne refait pas forcément d'ARP).
-2. ✅ Fichier de configuration (associations de confiance, TTL, gravités),
-   validé au démarrage.
+2. ✅ Fichiers de configuration (associations de confiance, TTL, gravités),
+   un fichier par règle listé explicitement, validés au démarrage.
 3. Corrélation DHCP/ARP : une machine légitime qui change de MAC obtient
    d'abord un bail DHCP avec sa nouvelle MAC, ce que ne fait pas un usurpateur.
    Nécessite le décodage de l'UDP (ports 67 et 68).
