@@ -299,6 +299,12 @@ Après une modification **voulue** du comportement, les résultats attendus se
 régénèrent avec `RWATCH_BLESS=1 cargo test --test replay`, puis se relisent
 (`git diff tests/expected/`) avant d'être committés.
 
+Un test distinct, `tests/attaque_reelle.rs`, rejoue une CAPTURE RÉELLE : un
+empoisonnement ARP mené sur le laboratoire du projet (voir
+[`tests/captures/README.md`](tests/captures/README.md)). rwatch doit en tirer
+exactement les deux alertes attendues, et seulement deux malgré la rafale de
+trames forgées (vérification de la période anti-rafale).
+
 ## Feuille de route
 
 - [x] Capture : interface réseau et rejeu de fichiers `.pcap`
@@ -306,7 +312,7 @@ régénèrent avec `RWATCH_BLESS=1 cargo test --test replay`, puis se relisent
 - [x] ARP-001 : empoisonnement ARP, avec tests de rejeu
 - [x] Configuration par fichier (associations de confiance, seuils, gravités)
 - [ ] Émission des alertes vers un endpoint HTTP configurable
-- [ ] Validation en conditions réelles sur le labo
+- [x] Validation en conditions réelles sur le labo (attaque ARP détectée, test de non-régression)
 - [ ] SCAN-001 : détection de scan de ports
 - [ ] Règles MQTT : usurpation de Client ID, débit de publication anormal
 - [ ] Déploiement sur Raspberry Pi (service systemd, privilèges minimaux)
@@ -331,4 +337,5 @@ réseau peuvent contenir des données personnelles et des identifiants.
 
 ## Licence
 
-Licence MIT
+Double licence MIT ou Apache-2.0, au choix, comme rnifler. Voir le fichier
+`LICENSE`.

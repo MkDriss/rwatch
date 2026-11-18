@@ -150,9 +150,15 @@ fn chaque_scenario_a_son_test_et_son_resultat_attendu() {
         ]
     );
 
+    // Seuls les fichiers .jsonl À LA RACINE de tests/expected/ appartiennent
+    // aux scénarios de ce test. Les sous-dossiers (ex. expected/attaque/, pour
+    // le test d'attaque réelle) ont leur propre test et sont ignorés ici.
     let mut fichiers: Vec<String> = std::fs::read_dir(expected_dir())
         .expect("dossier tests/expected")
-        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .map(|e| e.unwrap())
+        .filter(|e| e.file_type().unwrap().is_file())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| n.ends_with(".jsonl"))
         .collect();
     fichiers.sort();
     let mut attendus: Vec<String> = noms.iter().map(|n| format!("{n}.jsonl")).collect();

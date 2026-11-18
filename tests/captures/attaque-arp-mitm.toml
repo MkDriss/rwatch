@@ -1,0 +1,14 @@
+# Configuration du TEST attaque_reelle (voir tests/attaque_reelle.rs).
+#
+# Elle reproduit la partie de la configuration du labo sec-lab-iot qui est
+# utile à ce test : les associations de confiance de la passerelle (le Pi) et
+# de l'actionneur, les deux cibles de l'empoisonnement ARP enregistré dans
+# attaque-arp-mitm.pcap. La configuration complète du labo (les quatre objets,
+# les baux dnsmasq) vit dans le dépôt sec-lab-iot, dont ce dépôt ne dépend pas.
+
+[rules.arp_spoofing]
+binding_ttl_secs = 300
+
+[rules.arp_spoofing.trusted]
+"192.168.60.1"   = "d8:3a:dd:fa:07:38"   # Pi : passerelle et broker MQTT
+"192.168.60.124" = "20:50:0d:29:e1:f0"   # actionneur (cible de l'altération)
