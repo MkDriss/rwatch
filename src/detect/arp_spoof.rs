@@ -18,6 +18,14 @@
 //! Une revendication contradictoire ne remplace JAMAIS l'association connue :
 //! l'attaquant ne peut pas « s'installer » en répétant ses réponses.
 //!
+//! « Vue récemment » tient compte de TOUT le trafic IPv4 de la machine, pas
+//! seulement de l'ARP : une machine active en TCP ne refait pas forcément
+//! d'ARP (son cache est confirmé par les couches supérieures). Une trame IPv4
+//! dont l'IP source ET la MAC source correspondent à une association connue
+//! la rafraîchit. Le trafic IP n'APPREND jamais d'association : seul l'ARP le
+//! fait (un paquet venu d'Internet porte la MAC du routeur, pas celle de son
+//! émetteur).
+//!
 //! # Qui désigner ?
 //!
 //! Un message usurpé porte l'IP de la VICTIME et la MAC de l'attaquant. Le
@@ -28,11 +36,15 @@
 //!
 //! # Limites connues
 //!
-//! - Si la victime se tait plus de `binding_ttl` pendant l'attaque, la MAC de
-//!   l'attaquant est apprise ; c'est le retour de la victime qui sera signalé.
+//! - Si la victime se tait COMPLÈTEMENT (ni ARP ni IPv4) plus de
+//!   `binding_ttl` pendant l'attaque, la MAC de l'attaquant est apprise ;
+//!   c'est le retour de la victime qui sera signalé.
 //! - Une machine qui change de MAC sans se taire assez longtemps (MAC
 //!   aléatoire renouvelée à la reconnexion) produit un faux positif : à
-//!   régler avec `binding_ttl` ou une association de confiance.
+//!   régler avec `binding_ttl` (à MESURER sur le réseau surveillé) ou une
+//!   association de confiance.
+//! - Le rafraîchissement par le trafic IPv4 suppose que ce trafic est capturé
+//!   (filtre BPF) ; le trafic IPv6 n'est pas pris en compte.
 
 use std::collections::BTreeMap;
 use std::net::{IpAddr, Ipv4Addr};
@@ -40,7 +52,7 @@ use std::time::Duration;
 
 use super::Rule;
 use crate::alert::{Alert, Severity, Timestamp};
-use crate::decode::{Arp, ArpOp, Frame, MacAddr};
+use crate::decode::{Arp, ArpOp, Content, Frame, Ipv4Sender, MacAddr};
 
 /// Identifiant de la règle (champ `rule_id`).
 pub const RULE_ID: &str = "ARP-001";
@@ -133,6 +145,17 @@ impl ArpSpoof {
         }
         if self.pending.len() < self.config.max_entries || self.pending.contains_key(&ip) {
             self.pending.insert(ip, ts);
+        }
+    }
+
+    /// Une trame IPv4 de `sender` prouve que sa machine est toujours active :
+    /// si elle correspond exactement à une association connue, on la
+    /// rafraîchit. Rien d'autre : le trafic IP n'apprend ni ne contredit.
+    fn refresh(&mut self, sender: Ipv4Sender, ts: Duration) {
+        if let Some(binding) = self.bindings.get_mut(&sender.ip)
+            && binding.mac == sender.mac
+        {
+            binding.last_seen = ts;
         }
     }
 
@@ -259,7 +282,10 @@ impl Rule for ArpSpoof {
     }
 
     fn on_frame(&mut self, ts: Duration, frame: &Frame<'_>) -> Vec<Alert> {
-        let Frame::Arp(arp) = frame else {
+        if let Some(sender) = frame.ipv4_sender {
+            self.refresh(sender, ts);
+        }
+        let Content::Arp(arp) = &frame.content else {
             return Vec::new();
         };
         if arp.operation == ArpOp::Request {
@@ -312,11 +338,27 @@ mod tests {
         }
     }
 
+    /// Une trame ARP (sans émetteur IPv4 : l'ARP n'est pas de l'IPv4).
+    fn trame_arp(arp: Arp) -> Frame<'static> {
+        Frame {
+            ipv4_sender: None,
+            content: Content::Arp(arp),
+        }
+    }
+
+    /// Une trame IPv4 ordinaire (TCP, UDP...) émise par (ip, mac).
+    fn trame_ipv4(ip: Ipv4Addr, mac: MacAddr) -> Frame<'static> {
+        Frame {
+            ipv4_sender: Some(Ipv4Sender { mac, ip }),
+            content: Content::Other,
+        }
+    }
+
     /// Passe une suite de (instant, message) à la règle ; renvoie les alertes.
     fn rejouer(regle: &mut ArpSpoof, messages: &[(u64, Arp)]) -> Vec<Alert> {
         messages
             .iter()
-            .flat_map(|(t, arp)| regle.on_frame(s(*t), &Frame::Arp(*arp)))
+            .flat_map(|(t, arp)| regle.on_frame(s(*t), &trame_arp(*arp)))
             .collect()
     }
 
@@ -506,6 +548,50 @@ mod tests {
     }
 
     #[test]
+    fn le_trafic_ipv4_de_la_victime_la_maintient_vivante() {
+        // La victime ne refait plus d'ARP mais publie en TCP toutes les 30 s.
+        let mut regle = reseau_appris();
+        for t in (30..=390).step_by(30) {
+            regle.on_frame(s(t), &trame_ipv4(VICTIME, MAC_VICTIME));
+        }
+        // 400 s après son dernier ARP, mais 10 s après son dernier paquet.
+        let alertes = rejouer(
+            &mut regle,
+            &[(
+                400,
+                reponse((VICTIME, MAC_ATTAQUANT), (PASSERELLE, MAC_PASSERELLE)),
+            )],
+        );
+        assert_eq!(alertes.len(), 1);
+    }
+
+    #[test]
+    fn le_trafic_relaye_par_l_attaquant_ne_rafraichit_pas() {
+        // Homme du milieu : l'attaquant relaie les paquets de la victime avec
+        // SA MAC. IP de la victime + MAC de l'attaquant : pas de rafraîchissement.
+        let mut regle = reseau_appris();
+        for t in (30..=390).step_by(30) {
+            regle.on_frame(s(t), &trame_ipv4(VICTIME, MAC_ATTAQUANT));
+        }
+        let nouvelle_mac = MacAddr([0x24, 0x6f, 0x28, 0x00, 0x00, 0xff]);
+        // La vraie MAC s'est tue depuis 398 s : changement légitime présumé.
+        let alertes = rejouer(
+            &mut regle,
+            &[(400, requete((VICTIME, nouvelle_mac), PASSERELLE))],
+        );
+        assert!(alertes.is_empty(), "{alertes:#?}");
+    }
+
+    #[test]
+    fn le_trafic_ip_n_apprend_aucune_association() {
+        // Un paquet venu d'Internet porte la MAC de la passerelle.
+        let mut regle = ArpSpoof::new(Config::default());
+        let distante = Ipv4Addr::new(64, 177, 121, 3);
+        regle.on_frame(s(1), &trame_ipv4(distante, MAC_PASSERELLE));
+        assert!(regle.bindings.is_empty());
+    }
+
+    #[test]
     fn la_sonde_rfc_5227_est_ignoree() {
         let mut regle = reseau_appris();
         let sonde = Arp {
@@ -521,7 +607,11 @@ mod tests {
     #[test]
     fn les_trames_non_arp_sont_ignorees() {
         let mut regle = ArpSpoof::new(Config::default());
-        assert!(regle.on_frame(s(1), &Frame::Other).is_empty());
+        assert!(
+            regle
+                .on_frame(s(1), &trame_ipv4(VICTIME, MAC_VICTIME))
+                .is_empty()
+        );
     }
 
     #[test]
@@ -533,7 +623,7 @@ mod tests {
         // Inondation : 1000 IP différentes, une seule MAC.
         for i in 0..1000u32 {
             let ip = Ipv4Addr::from(0x0a00_0000 + i);
-            regle.on_frame(s(1), &Frame::Arp(requete((ip, MAC_ATTAQUANT), PASSERELLE)));
+            regle.on_frame(s(1), &trame_arp(requete((ip, MAC_ATTAQUANT), PASSERELLE)));
         }
         assert!(regle.bindings.len() <= 8);
         assert!(regle.pending.len() <= 8);

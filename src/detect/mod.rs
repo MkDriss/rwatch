@@ -8,6 +8,15 @@
 //! Le temps : les règles ne lisent JAMAIS l'horloge système. Elles reçoivent
 //! l'horodatage de capture de chaque trame, ce qui rend la détection
 //! identique en direct et en rejeu d'un fichier `.pcap` (déterminisme).
+//!
+//! # Limite connue : pas de contexte partagé
+//!
+//! Chaque règle possède son propre état, isolé des autres : les règles sont
+//! indépendantes et se testent séparément. En contrepartie, une connaissance
+//! utile à plusieurs règles (par exemple la table IP → MAC, qui servirait
+//! aussi à une corrélation DHCP/ARP) serait dupliquée dans chacune. Un
+//! « contexte » partagé, transmis aux règles par le moteur, sera introduit le
+//! jour où ce besoin apparaîtra.
 
 pub mod arp_spoof;
 

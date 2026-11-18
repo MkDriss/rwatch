@@ -17,7 +17,7 @@ use std::time::Duration;
 use clap::Parser;
 use pcap::{Activated, Capture};
 use rwatch::capture;
-use rwatch::decode::{self, Arp, ArpOp, Frame};
+use rwatch::decode::{self, Arp, ArpOp, Content, Frame};
 use rwatch::detect::{Engine, arp_spoof};
 
 /// IDS réseau : détecte les attaques et émet des alertes JSON (une par ligne).
@@ -32,8 +32,9 @@ struct Args {
     #[arg(short, long, value_name = "FICHIER", conflicts_with = "interface")]
     read: Option<PathBuf>,
 
-    /// Filtre BPF (syntaxe tcpdump)
-    #[arg(short, long, default_value = "arp or tcp")]
+    /// Filtre BPF (syntaxe tcpdump). Par défaut : l'ARP et tout le trafic IP,
+    /// qui sert aussi à savoir quelles machines sont actives.
+    #[arg(short, long, default_value = "arp or ip or ip6")]
     filter: String,
 
     /// Nombre de trames à lire avant de s'arrêter (0 = illimité)
@@ -149,10 +150,10 @@ fn run<T: Activated + ?Sized>(cap: Capture<T>, args: &Args) -> Result<(), Box<dy
 /// Mode --verbose : une ligne lisible par trame ARP ou SYN, sur stderr.
 fn describe(elapsed: Duration, frame: &Frame<'_>) {
     let time = format!("{:>11.6}", elapsed.as_secs_f64());
-    match frame {
-        Frame::Arp(arp) => eprintln!("[{time}] {}", describe_arp(arp)),
+    match &frame.content {
+        Content::Arp(arp) => eprintln!("[{time}] {}", describe_arp(arp)),
         // SYN sans ACK = premier paquet d'une connexion.
-        Frame::Tcp(seg) if seg.flags.syn && !seg.flags.ack => eprintln!(
+        Content::Tcp(seg) if seg.flags.syn && !seg.flags.ack => eprintln!(
             "[{time}] SYN  {}:{} -> {}:{}",
             seg.src_ip, seg.src_port, seg.dst_ip, seg.dst_port
         ),

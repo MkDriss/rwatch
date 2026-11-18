@@ -122,6 +122,11 @@ fn arp_changement_legitime() {
 }
 
 #[test]
+fn arp_victime_active_en_tcp() {
+    verifier("arp-victime-active-en-tcp");
+}
+
+#[test]
 fn arp_sonde() {
     verifier("arp-sonde");
 }
@@ -140,6 +145,7 @@ fn chaque_scenario_a_son_test_et_son_resultat_attendu() {
             "arp-spoofing",
             "arp-attaquant-inconnu",
             "arp-changement-legitime",
+            "arp-victime-active-en-tcp",
             "arp-sonde",
         ]
     );

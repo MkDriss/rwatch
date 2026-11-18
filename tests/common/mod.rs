@@ -110,6 +110,21 @@ pub fn syn(from: Host, to: Host, dst_port: u16) -> Vec<u8> {
     frame
 }
 
+/// Segment TCP de données (ACK + PSH) de `from` vers `to`:`dst_port` : du
+/// trafic ordinaire, sans aucun message ARP.
+pub fn tcp_data(from: Host, to: Host, dst_port: u16, payload: &[u8]) -> Vec<u8> {
+    let builder = PacketBuilder::ethernet2(from.1, to.1)
+        .ipv4(from.0, to.0, 64)
+        .tcp(51_234, dst_port, 1000, 65_535)
+        .psh()
+        .ack(1);
+    let mut frame = Vec::with_capacity(builder.size(payload.len()));
+    builder
+        .write(&mut frame, payload)
+        .expect("écriture en mémoire");
+    frame
+}
+
 // ===========================================================================
 // Scénarios
 // ===========================================================================
@@ -222,6 +237,25 @@ pub fn scenarios_at(start: Duration) -> Vec<Scenario> {
                 t.presentations()
                     .at(400.0, arp_request(VICTIME_NOUVELLE_CARTE, PASSERELLE.0))
                     .at(400.001, arp_reply(PASSERELLE, VICTIME_NOUVELLE_CARTE));
+                t.into_frames()
+            },
+        },
+        Scenario {
+            name: "arp-victime-active-en-tcp",
+            description: "la victime ne fait plus d'ARP mais publie en TCP toutes les \
+                          30 s ; l'attaquant l'usurpe au bout de 400 s",
+            frames: {
+                let mut t = Timeline::new(start);
+                t.presentations();
+                // Comme un objet IoT qui publie sa télémétrie MQTT : aucun ARP,
+                // son cache est confirmé par TCP.
+                for i in 1..=13 {
+                    t.at(
+                        30.0 * f64::from(i),
+                        tcp_data(VICTIME, PASSERELLE, 1883, b"21.5"),
+                    );
+                }
+                t.at(400.0, arp_reply((VICTIME.0, ATTAQUANT.1), PASSERELLE));
                 t.into_frames()
             },
         },

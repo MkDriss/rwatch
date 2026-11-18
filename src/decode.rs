@@ -1,9 +1,10 @@
 //! Couche DÉCODAGE : classe chaque trame Ethernet pour les règles de détection.
 //!
+//! - pour toute trame IPv4 : l'émetteur (MAC Ethernet source, IP source) ;
 //! - TCP sur IPv4/IPv6 : délégué à `rnifler::parser` (avec ses checksums) ;
 //! - ARP sur Ethernet/IPv4 : décodé ici, car rnifler range l'ARP dans
 //!   `Parsed::Other` (il ne s'intéresse qu'au TCP) ;
-//! - tout le reste : `Frame::Other`.
+//! - tout le reste : `Content::Other`.
 //!
 //! Comme dans rnifler, ce module ne dépend pas de libpcap : il reçoit des
 //! octets et se teste sans réseau ni privilèges.
@@ -11,7 +12,7 @@
 use std::fmt;
 use std::net::Ipv4Addr;
 
-use etherparse::{ArpOperation, NetSlice, SlicedPacket};
+use etherparse::{ArpOperation, ArpPacketSlice, LinkSlice, NetSlice, SlicedPacket, TransportSlice};
 use rnifler::parser::{self, ParseError, Parsed, TcpSegment};
 use serde::{Serialize, Serializer};
 
@@ -59,14 +60,36 @@ pub struct Arp {
     pub target_ip: Ipv4Addr,
 }
 
-/// Résultat du décodage d'une trame.
+/// L'émetteur d'un paquet IPv4 : la MAC source de l'en-tête Ethernet et
+/// l'IP source de l'en-tête IPv4.
+///
+/// Attention : pour un paquet venu d'un autre réseau (Internet), la MAC est
+/// celle du routeur qui l'a relayé, pas celle de la machine d'origine. Ce
+/// couple n'a de sens que pour une machine du réseau local.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Ipv4Sender {
+    pub mac: MacAddr,
+    pub ip: Ipv4Addr,
+}
+
+/// Une trame décodée : ce qui est commun à toutes les trames (l'émetteur
+/// IPv4, s'il y en a un), plus son contenu.
+#[derive(Debug)]
+pub struct Frame<'a> {
+    /// Présent si la trame transporte de l'IPv4 (TCP, UDP, ICMP...) ;
+    /// absent pour l'ARP, l'IPv6, etc.
+    pub ipv4_sender: Option<Ipv4Sender>,
+    pub content: Content<'a>,
+}
+
+/// Le contenu d'une trame, tel que les règles le regardent.
 ///
 /// `'a` : la variante `Tcp` contient un `TcpSegment<'a>` dont le payload
 /// EMPRUNTE les octets de la trame (zéro-copie, comme dans rnifler). Une
 /// `Frame` ne peut donc pas survivre à la trame dont elle provient. `Arp`,
 /// lui, ne contient que des valeurs copiées (adresses) : il n'emprunte rien.
 #[derive(Debug)]
-pub enum Frame<'a> {
+pub enum Content<'a> {
     Arp(Arp),
     Tcp(TcpSegment<'a>),
     /// Trame valide qui n'intéresse pas les règles actuelles (UDP, ICMP,
@@ -76,29 +99,44 @@ pub enum Frame<'a> {
 
 /// Décode une trame qui commence par un en-tête Ethernet II.
 ///
-/// Une trame malformée renvoie l'erreur de rnifler (`ParseError`) : c'est à
+/// Un seul découpage par etherparse pour toutes les trames ; les segments TCP
+/// sont en plus confiés à `rnifler::parser` (checksums, flags, payload).
+///
+/// Une trame malformée renvoie une `ParseError` (le type de rnifler) : c'est à
 /// l'appelant de décider quoi en faire (pour un IDS, c'est une information).
 pub fn decode(frame: &[u8]) -> Result<Frame<'_>, ParseError> {
-    match parser::parse_ethernet(frame)? {
-        Parsed::Tcp(segment) => Ok(Frame::Tcp(segment)),
-        // rnifler ne distingue pas l'ARP du reste : on regarde nous-mêmes.
-        Parsed::Other => Ok(decode_arp(frame).map_or(Frame::Other, Frame::Arp)),
-    }
+    let sliced = SlicedPacket::from_ethernet(frame).map_err(ParseError::Malformed)?;
+
+    // L'émetteur IPv4, commun à TCP, UDP, ICMP...
+    let ipv4_sender = match (&sliced.link, &sliced.net) {
+        (Some(LinkSlice::Ethernet2(eth)), Some(NetSlice::Ipv4(ipv4))) => Some(Ipv4Sender {
+            mac: MacAddr(eth.source()),
+            ip: ipv4.header().source_addr(),
+        }),
+        _ => None,
+    };
+
+    let content = match (&sliced.net, &sliced.transport) {
+        (Some(NetSlice::Arp(arp)), _) => arp_from_slice(arp).map_or(Content::Other, Content::Arp),
+        // TCP (sur IPv4 ou IPv6) : délégué à rnifler.
+        (_, Some(TransportSlice::Tcp(_))) => match parser::parse_ethernet(frame)? {
+            Parsed::Tcp(segment) => Content::Tcp(segment),
+            Parsed::Other => Content::Other,
+        },
+        _ => Content::Other,
+    };
+
+    Ok(Frame {
+        ipv4_sender,
+        content,
+    })
 }
 
-/// Extrait un message ARP Ethernet/IPv4, ou `None` si la trame n'en est pas un.
-///
-/// Seules les trames NON TCP arrivent ici : le second découpage par
-/// etherparse ne coûte que pour l'ARP et le trafic que rwatch ignore.
-fn decode_arp(frame: &[u8]) -> Option<Arp> {
-    // `?` sur une `Option` : si c'est `None` (ou une erreur convertie par
-    // `.ok()`), la fonction renvoie immédiatement `None`.
-    let sliced = SlicedPacket::from_ethernet(frame).ok()?;
-    let Some(NetSlice::Arp(arp)) = sliced.net else {
-        return None;
-    };
+/// Convertit un message ARP découpé en [`Arp`], ou `None` s'il n'est pas de
+/// type Ethernet/IPv4.
+fn arp_from_slice(arp: &ArpPacketSlice<'_>) -> Option<Arp> {
     // Vue typée Ethernet/IPv4 : échoue si les tailles d'adresses ne sont
-    // pas 6 (MAC) et 4 (IPv4).
+    // pas 6 (MAC) et 4 (IPv4). `?` sur une `Option` : renvoie `None` aussitôt.
     let arp = arp.to_packet().try_eth_ipv4().ok()?;
     let operation = match arp.operation {
         ArpOperation::REQUEST => ArpOp::Request,
@@ -146,7 +184,10 @@ mod tests {
 
     fn expect_arp(frame: &[u8]) -> Arp {
         match decode(frame) {
-            Ok(Frame::Arp(arp)) => arp,
+            Ok(Frame {
+                ipv4_sender: None,
+                content: Content::Arp(arp),
+            }) => arp,
             other => panic!("ARP attendu, obtenu : {other:?}"),
         }
     }
@@ -209,13 +250,21 @@ mod tests {
             .syn();
         let mut frame = Vec::new();
         builder.write(&mut frame, &[]).unwrap();
-        match decode(&frame) {
-            Ok(Frame::Tcp(seg)) => {
+        let decoded = decode(&frame).unwrap();
+        match decoded.content {
+            Content::Tcp(seg) => {
                 assert!(seg.flags.syn && !seg.flags.ack);
                 assert_eq!(seg.dst_port, 22);
             }
             other => panic!("segment TCP attendu, obtenu : {other:?}"),
         }
+        assert_eq!(
+            decoded.ipv4_sender,
+            Some(Ipv4Sender {
+                mac: MacAddr(MAC_ESP),
+                ip: Ipv4Addr::new(192, 168, 50, 50)
+            })
+        );
     }
 
     #[test]
@@ -225,7 +274,13 @@ mod tests {
             .udp(5353, 5353);
         let mut frame = Vec::new();
         builder.write(&mut frame, b"x").unwrap();
-        assert!(matches!(decode(&frame), Ok(Frame::Other)));
+        let decoded = decode(&frame).unwrap();
+        assert!(matches!(decoded.content, Content::Other));
+        // L'émetteur IPv4 est connu même si le contenu n'intéresse aucune règle.
+        assert_eq!(
+            decoded.ipv4_sender.map(|s| s.ip),
+            Some(Ipv4Addr::new(192, 168, 50, 182))
+        );
     }
 
     #[test]

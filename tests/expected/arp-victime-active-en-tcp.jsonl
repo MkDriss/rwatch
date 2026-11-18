@@ -1,0 +1,1 @@
+{"timestamp":"2026-01-01T00:06:40Z","type":"arp_spoofing","severity":"high","source_ip":"192.168.50.50","source_mac":"aa:bb:cc:dd:ee:ff","target":"192.168.50.182","details":"Réponse ARP non sollicitée : 192.168.50.182 revendiqué par aa:bb:cc:dd:ee:ff, alors que l'association apprise indique 24:6f:28:00:00:b6","rule_id":"ARP-001"}
