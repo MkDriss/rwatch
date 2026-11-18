@@ -17,8 +17,14 @@ use std::time::Duration;
 use clap::Parser;
 use pcap::{Activated, Capture};
 use rwatch::capture;
+use rwatch::config::FileConfig;
 use rwatch::decode::{self, Arp, ArpOp, Content, Frame};
-use rwatch::detect::{Engine, arp_spoof};
+use rwatch::detect::Engine;
+
+/// Filtre BPF utilisé si ni la ligne de commande ni le fichier de
+/// configuration n'en donnent un : l'ARP et tout le trafic IP, qui sert aussi
+/// à savoir quelles machines sont actives.
+const DEFAULT_FILTER: &str = "arp or ip or ip6";
 
 /// IDS réseau : détecte les attaques et émet des alertes JSON (une par ligne).
 #[derive(Parser, Debug)]
@@ -32,10 +38,14 @@ struct Args {
     #[arg(short, long, value_name = "FICHIER", conflicts_with = "interface")]
     read: Option<PathBuf>,
 
-    /// Filtre BPF (syntaxe tcpdump). Par défaut : l'ARP et tout le trafic IP,
-    /// qui sert aussi à savoir quelles machines sont actives.
-    #[arg(short, long, default_value = "arp or ip or ip6")]
-    filter: String,
+    /// Fichier de configuration (TOML). Sans lui : valeurs par défaut
+    #[arg(short = 'C', long, value_name = "FICHIER")]
+    config: Option<PathBuf>,
+
+    /// Filtre BPF (syntaxe tcpdump), prioritaire sur celui de la
+    /// configuration [défaut : "arp or ip or ip6"]
+    #[arg(short, long)]
+    filter: Option<String>,
 
     /// Nombre de trames à lire avant de s'arrêter (0 = illimité)
     #[arg(short, long, default_value_t = 0)]
@@ -77,26 +87,48 @@ fn is_broken_pipe(error: &(dyn Error + 'static)) -> bool {
 fn run_cli() -> Result<(), Box<dyn Error>> {
     let args = Args::parse();
 
+    // Configuration : le fichier s'il est donné, sinon les valeurs par défaut.
+    let config = match &args.config {
+        Some(path) => {
+            eprintln!("[*] Configuration : {}", path.display());
+            FileConfig::load(path)?
+        }
+        None => {
+            eprintln!("[*] Configuration : valeurs par défaut (aucun --config)");
+            FileConfig::default()
+        }
+    };
+    // Priorité : ligne de commande, puis fichier, puis valeur par défaut.
+    let filter = args
+        .filter
+        .clone()
+        .or_else(|| config.capture.filter.clone())
+        .unwrap_or_else(|| DEFAULT_FILTER.to_string());
+    // Les règles sont construites AVANT d'ouvrir la capture : une
+    // configuration incohérente arrête rwatch avant toute écoute.
+    let engine = Engine::new(config.rules()?);
+    if engine.rule_ids().is_empty() {
+        eprintln!("[!] Aucune règle active : rwatch ne lèvera aucune alerte");
+    } else {
+        eprintln!("[*] Règles actives : {}", engine.rule_ids().join(", "));
+    }
+
     // Les deux branches ouvrent un type de capture DIFFÉRENT
     // (`Capture<Offline>` / `Capture<Active>`) : chacune appelle donc `run`,
     // qui est générique et accepte les deux.
     match (&args.read, &args.interface) {
         (Some(path), _) => {
             eprintln!(
-                "[*] Lecture de {} | filtre BPF : \"{}\"",
-                path.display(),
-                args.filter
+                "[*] Lecture de {} | filtre BPF : \"{filter}\"",
+                path.display()
             );
-            let cap = rnifler::capture::open_offline(path, &args.filter)?;
-            run(cap, &args)
+            let cap = rnifler::capture::open_offline(path, &filter)?;
+            run(cap, engine, &args)
         }
         (None, Some(interface)) => {
-            eprintln!(
-                "[*] Écoute sur {interface} | filtre BPF : \"{}\"",
-                args.filter
-            );
-            let cap = rnifler::capture::open_live(interface, &args.filter, 65535, 1000)?;
-            run(cap, &args)
+            eprintln!("[*] Écoute sur {interface} | filtre BPF : \"{filter}\"");
+            let cap = rnifler::capture::open_live(interface, &filter, 65535, 1000)?;
+            run(cap, engine, &args)
         }
         // Impossible : clap exige --interface quand --read est absent.
         (None, None) => unreachable!("clap impose --interface ou --read"),
@@ -104,14 +136,11 @@ fn run_cli() -> Result<(), Box<dyn Error>> {
 }
 
 /// Lit toutes les trames de `cap`, détecte, émet les alertes, puis un résumé.
-fn run<T: Activated + ?Sized>(cap: Capture<T>, args: &Args) -> Result<(), Box<dyn Error>> {
-    // Les règles actives et leurs réglages. Pour l'instant : valeurs par
-    // défaut ; la prochaine étape les lira dans un fichier de configuration.
-    let mut engine = Engine::new(vec![Box::new(arp_spoof::ArpSpoof::new(
-        arp_spoof::Config::default(),
-    ))]);
-    eprintln!("[*] Règles actives : {}", engine.rule_ids().join(", "));
-
+fn run<T: Activated + ?Sized>(
+    cap: Capture<T>,
+    mut engine: Engine,
+    args: &Args,
+) -> Result<(), Box<dyn Error>> {
     let mut out = io::stdout().lock();
     let mut stats = Stats::default();
     // Horodatage de la première trame : les temps de --verbose lui sont relatifs.

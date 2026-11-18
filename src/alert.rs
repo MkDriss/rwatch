@@ -16,12 +16,13 @@ use std::fmt;
 use std::net::IpAddr;
 use std::time::Duration;
 
-use serde::{Serialize, Serializer};
+use serde::{Deserialize, Serialize, Serializer};
 
 use crate::decode::MacAddr;
 
-/// Gravité d'une alerte. Sérialisée en minuscules : `"high"`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+/// Gravité d'une alerte. En minuscules dans le JSON comme dans la
+/// configuration : `"high"`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Severity {
     Low,

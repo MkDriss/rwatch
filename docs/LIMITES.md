@@ -45,6 +45,15 @@ réseau.
   (champs facultatifs). C'est cohérent avec la règle des champs minimum du
   contrat, mais les consommateurs doivent gérer les deux.
 
+### Configuration
+
+- Le fichier est lu une seule fois, au démarrage : toute modification demande
+  de relancer rwatch (pas de rechargement à chaud).
+- Le fichier contient les associations de confiance : quiconque peut le
+  modifier peut désactiver la détection pour une adresse. En production, il
+  doit appartenir à root et n'être modifiable que par lui (à mettre en place
+  lors du déploiement sur le Pi).
+
 ### Décodage
 
 - Les segments TCP sont découpés deux fois (etherparse pour l'émetteur IPv4,
@@ -69,7 +78,8 @@ faux positifs.
 
 1. ✅ Rafraîchir les associations ARP avec tout le trafic IPv4 (une machine
    active en TCP ne refait pas forcément d'ARP).
-2. Fichier de configuration (associations de confiance, TTL, gravités).
+2. ✅ Fichier de configuration (associations de confiance, TTL, gravités),
+   validé au démarrage.
 3. Corrélation DHCP/ARP : une machine légitime qui change de MAC obtient
    d'abord un bail DHCP avec sa nouvelle MAC, ce que ne fait pas un usurpateur.
    Nécessite le décodage de l'UDP (ports 67 et 68).

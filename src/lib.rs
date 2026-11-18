@@ -11,9 +11,11 @@
 //! - [`capture`] : boucle de lecture des trames (interface ou fichier `.pcap`) ;
 //! - [`decode`] : classe chaque trame (ARP, segment TCP, autre) ;
 //! - [`detect`] : moteur et règles de détection ;
-//! - [`alert`] : l'alerte émise, conforme au contrat JSON.
+//! - [`alert`] : l'alerte émise, conforme au contrat JSON ;
+//! - [`config`] : lecture du fichier de configuration (TOML).
 
 pub mod alert;
 pub mod capture;
+pub mod config;
 pub mod decode;
 pub mod detect;

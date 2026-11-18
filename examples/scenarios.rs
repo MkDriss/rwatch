@@ -16,7 +16,7 @@ fn main() -> std::io::Result<()> {
     for scenario in common::scenarios() {
         let path = dir.join(format!("{}.pcap", scenario.name));
         common::write_pcap(&path, &scenario.frames)?;
-        println!("{:<28} {}", path.display(), scenario.description);
+        println!("{:<40} {}", path.display(), scenario.description);
     }
     Ok(())
 }

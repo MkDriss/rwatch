@@ -11,10 +11,11 @@
 
 use std::fmt;
 use std::net::Ipv4Addr;
+use std::str::FromStr;
 
 use etherparse::{ArpOperation, ArpPacketSlice, LinkSlice, NetSlice, SlicedPacket, TransportSlice};
 use rnifler::parser::{self, ParseError, Parsed, TcpSegment};
-use serde::{Serialize, Serializer};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// Une adresse MAC (6 octets).
 ///
@@ -36,6 +37,56 @@ impl fmt::Display for MacAddr {
 impl Serialize for MacAddr {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         serializer.collect_str(self)
+    }
+}
+
+/// Erreur de lecture d'une adresse MAC écrite sous forme de texte.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MacParseError(String);
+
+impl fmt::Display for MacParseError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "adresse MAC invalide « {} » (format attendu : aa:bb:cc:dd:ee:ff)",
+            self.0.escape_debug()
+        )
+    }
+}
+
+impl std::error::Error for MacParseError {}
+
+/// Lecture d'une MAC depuis du texte : `"aa:bb:cc:dd:ee:ff"` (majuscules
+/// acceptées). C'est ce trait qui rend possible `"…".parse::<MacAddr>()`.
+impl FromStr for MacAddr {
+    type Err = MacParseError;
+
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
+        let error = || MacParseError(text.to_string());
+        let mut bytes = [0u8; 6];
+        let mut parts = text.split(':');
+        for byte in &mut bytes {
+            let part = parts.next().ok_or_else(error)?;
+            // Exactement deux chiffres hexadécimaux par octet.
+            if part.len() != 2 || !part.chars().all(|c| c.is_ascii_hexdigit()) {
+                return Err(error());
+            }
+            *byte = u8::from_str_radix(part, 16).map_err(|_| error())?;
+        }
+        // Un septième morceau : trop d'octets.
+        if parts.next().is_some() {
+            return Err(error());
+        }
+        Ok(MacAddr(bytes))
+    }
+}
+
+/// Dans un fichier de configuration, une MAC s'écrit comme dans le JSON :
+/// on lit une chaîne, puis on la convertit avec `FromStr`.
+impl<'de> Deserialize<'de> for MacAddr {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let text = String::deserialize(deserializer)?;
+        text.parse().map_err(serde::de::Error::custom)
     }
 }
 
@@ -297,5 +348,31 @@ mod tests {
     #[test]
     fn affichage_d_une_mac() {
         assert_eq!(MacAddr(MAC_PI).to_string(), "dc:a6:32:01:02:03");
+    }
+
+    #[test]
+    fn lecture_d_une_mac() {
+        assert_eq!("dc:a6:32:01:02:03".parse(), Ok(MacAddr(MAC_PI)));
+        // Majuscules acceptées ; l'affichage reste en minuscules.
+        let mac: MacAddr = "DC:A6:32:01:02:03".parse().unwrap();
+        assert_eq!(mac.to_string(), "dc:a6:32:01:02:03");
+    }
+
+    #[test]
+    fn mac_mal_formee_refusee() {
+        for texte in [
+            "",
+            "dc:a6:32:01:02",       // 5 octets
+            "dc:a6:32:01:02:03:04", // 7 octets
+            "dc-a6-32-01-02-03",    // mauvais séparateur
+            "dc:a6:32:01:02:3",     // un seul chiffre
+            "dc:a6:32:01:02:+3",    // signe accepté par from_str_radix
+            "gg:a6:32:01:02:03",    // pas hexadécimal
+        ] {
+            assert!(
+                texte.parse::<MacAddr>().is_err(),
+                "accepté à tort : {texte:?}"
+            );
+        }
     }
 }

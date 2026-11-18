@@ -1,0 +1,45 @@
+# Exemple de configuration de rwatch.
+#
+#     rwatch --config rwatch.toml --interface wlan0
+#
+# Toutes les clés sont facultatives : une clé absente garde sa valeur par
+# défaut (celle indiquée en commentaire). Une clé inconnue, en revanche, est
+# une erreur : une faute de frappe ne passe jamais inaperçue.
+#
+# Les adresses ci-dessous sont des adresses réservées à la documentation
+# (192.0.2.0/24, RFC 5737 ; 00:00:5E:00:53:xx, RFC 9542) : remplacez-les par
+# celles de votre réseau.
+
+[capture]
+# Filtre BPF (syntaxe tcpdump). L'option --filter de la ligne de commande a
+# priorité sur cette valeur.
+# filter = "arp or ip or ip6"
+
+# ---------------------------------------------------------------------------
+# ARP-001 : usurpation d'adresse par empoisonnement ARP
+# ---------------------------------------------------------------------------
+[rules.arp_spoofing]
+# enabled = true
+
+# Gravité des alertes : "low", "medium", "high" ou "critical".
+# severity = "high"
+
+# Au-delà de ce délai sans nouvelle d'une MAC (ni ARP ni IPv4), une autre MAC
+# peut prendre son IP sans alerte (changement légitime présumé). À MESURER sur
+# le réseau surveillé : voir docs/LIMITES.md.
+# binding_ttl_secs = 300
+
+# Une réponse ARP est « sollicitée » si une requête pour la même IP a été vue
+# dans ce délai (information reportée dans les détails de l'alerte).
+# request_window_secs = 5
+
+# Une seule alerte par période pour un même couple (IP, MAC usurpatrice).
+# alert_cooldown_secs = 60
+
+# Taille maximale de chaque table interne : la mémoire reste bornée.
+# max_entries = 1024
+
+# Associations de confiance : vérifiées dès la première trame, elles
+# n'expirent jamais. Idéal pour la passerelle et les serveurs critiques.
+[rules.arp_spoofing.trusted]
+"192.0.2.1" = "00:00:5e:00:53:01"
