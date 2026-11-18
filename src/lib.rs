@@ -12,10 +12,12 @@
 //! - [`decode`] : classe chaque trame (ARP, segment TCP, autre) ;
 //! - [`detect`] : moteur et règles de détection ;
 //! - [`alert`] : l'alerte émise, conforme au contrat JSON ;
-//! - [`config`] : lecture du fichier de configuration (TOML).
+//! - [`config`] : lecture du fichier de configuration (TOML) ;
+//! - [`silence`] : mesure des silences, pour régler ARP-001 sur des données.
 
 pub mod alert;
 pub mod capture;
 pub mod config;
 pub mod decode;
 pub mod detect;
+pub mod silence;

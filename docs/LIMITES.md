@@ -29,7 +29,9 @@ conditions réelles a montré que :
 - avec le mode promiscuité, ces trames sont visibles.
 
 rwatch active donc ce mode par défaut (via `rnifler::capture::open_live_with`,
-ajoutée dans rnifler 1.2.0). Ce qu'un point d'accès laisse remonter dépend
+ajoutée dans rnifler 1.2.0). Sur ce matériel, la capacité `CAP_NET_RAW` suffit,
+y compris en mode promiscuité : `CAP_NET_ADMIN` n'est pas nécessaire (vérifié
+avec rwatch 0.2.1). Ce qu'un point d'accès laisse remonter dépend
 toutefois de son pilote et de son firmware : sur un autre matériel, la
 visibilité est à vérifier de la même façon (un ping entre deux stations,
 observé depuis le capteur avec `tcpdump` puis `tcpdump -p`).
@@ -93,10 +95,23 @@ rwatch).
 La valeur par défaut (300 s) est un point de départ, pas une vérité. Méthode :
 
 1. capturer le trafic normal du réseau surveillé pendant une période
-   représentative ;
-2. mesurer, pour chaque machine, l'intervalle maximal entre deux de ses trames
-   (ARP ou IPv4) ;
-3. régler `binding_ttl` confortablement au-dessus de ce maximum.
+   représentative, avec TOUTES les machines qui seront présentes ;
+2. mesurer, pour chaque machine, le plus long silence entre deux de ses trames
+   (ARP ou IPv4), avec l'outil fourni, qui compte exactement ce que compte
+   ARP-001 :
+
+   ```console
+   $ cargo run --example silences -- trafic-normal.pcap
+   ```
+
+3. régler `binding_ttl_secs` confortablement au-dessus du plus long silence de
+   la machine la plus discrète.
+
+L'outil affiche aussi le « silence final » de chaque machine (entre sa
+dernière trame et la fin de la capture). Il n'est pas compté dans la mesure,
+puisqu'on ignore combien de temps il aurait duré, mais un silence final très
+long signale une machine partie en cours de capture, ou une capture trop
+courte.
 
 Plus le TTL est long, plus l'attaquant a besoin d'un long silence de la
 victime ; plus il est court, moins un changement de MAC légitime produit de
@@ -113,7 +128,10 @@ faux positifs.
    Nécessite le décodage de l'UDP (ports 67 et 68).
 4. Schéma JSON du contrat d'alerte, partagé avec le dashboard, contre lequel
    les tests valident chaque alerte.
-5. Piste : l'incohérence IP/MAC (paquets portant l'IP de la victime mais la
+5. Attestation de provenance des binaires publiés : l'empreinte SHA-256 de la
+   release protège contre un téléchargement corrompu, pas contre un compte
+   GitHub compromis (elle vient de la même page que l'archive).
+6. Piste : l'incohérence IP/MAC (paquets portant l'IP de la victime mais la
    MAC de l'attaquant, qui les relaie) comme signal d'homme du milieu
    indépendant de l'ARP.
 

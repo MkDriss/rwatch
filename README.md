@@ -153,9 +153,10 @@ nécessaire, selon le principe du moindre privilège :
 $ sudo setcap cap_net_raw=eip target/release/rwatch
 ```
 
-La capacité est perdue à chaque recompilation, et tout utilisateur qui peut
-exécuter le binaire peut alors écouter le réseau : restreignez son exécution à un
-groupe dédié.
+Sur un Raspberry Pi 4 (Raspberry Pi OS 64 bits), cette seule capacité suffit,
+y compris en mode promiscuité. Elle est perdue à chaque recompilation ou
+réinstallation du binaire, et tout utilisateur qui peut l'exécuter peut alors
+écouter le réseau : restreignez son exécution à un groupe dédié.
 
 ## Configuration
 
@@ -285,6 +286,13 @@ rejouer à la main :
 ```console
 $ cargo run --example scenarios -- captures
 $ cargo run -- --read captures/arp-spoofing.pcap
+```
+
+Pour régler `binding_ttl_secs` sur le trafic réel d'un réseau, l'exemple
+`silences` mesure le plus long silence de chaque machine dans une capture :
+
+```console
+$ cargo run --example silences -- trafic-normal.pcap
 ```
 
 Après une modification **voulue** du comportement, les résultats attendus se
