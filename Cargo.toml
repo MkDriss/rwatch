@@ -3,9 +3,12 @@ name = "rwatch"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.88"
-license = "MIT"
+description = "rwatch : IDS réseau en Rust (capture, détection par règles, alertes JSON)"
+license = "MIT OR Apache-2.0"
 readme = "README.md"
 repository = "https://github.com/MkDriss/rwatch"
+keywords = ["ids", "pcap", "security", "iot", "arp"]
+categories = ["command-line-utilities", "network-programming"]
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
