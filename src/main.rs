@@ -107,10 +107,12 @@ fn run_cli() -> Result<(), Box<dyn Error>> {
     // Les règles sont construites AVANT d'ouvrir la capture : une
     // configuration incohérente arrête rwatch avant toute écoute.
     let engine = Engine::new(config.rules()?);
+    // D'où vient la configuration de chaque règle, et est-elle active ?
+    for line in config.rules_summary() {
+        eprintln!("[*] {line}");
+    }
     if engine.rule_ids().is_empty() {
         eprintln!("[!] Aucune règle active : rwatch ne lèvera aucune alerte");
-    } else {
-        eprintln!("[*] Règles actives : {}", engine.rule_ids().join(", "));
     }
 
     // Les deux branches ouvrent un type de capture DIFFÉRENT

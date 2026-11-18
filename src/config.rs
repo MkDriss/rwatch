@@ -8,8 +8,13 @@
 //! - La CONFIGURATION INTERNE (`arp_spoof::Config`) : ce que le code utilise,
 //!   avec des types précis (`Duration`).
 //!
-//! La conversion de l'un vers l'autre est l'endroit unique où l'on VALIDE ce
-//! que le type seul ne garantit pas (un TTL nul, une table de taille 0…).
+//! Les invariants simples sont portés par les TYPES du format : un TTL ou une
+//! taille de table nuls sont impossibles (`NonZeroU64`, `NonZeroUsize`), et
+//! refusés dès la lecture, avec la ligne et la colonne. La conversion vers la
+//! configuration interne valide le reste (`0.0.0.0` en association de
+//! confiance), et elle est appliquée à TOUTES les règles, désactivées
+//! comprises : une configuration invalide ne doit pas attendre la réactivation
+//! d'une règle pour être découverte.
 //! Le format du fichier peut évoluer sans toucher aux règles, et inversement.
 //!
 //! # Sécurité par défaut
@@ -45,6 +50,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::io;
 use std::net::Ipv4Addr;
+use std::num::{NonZeroU64, NonZeroUsize};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -64,6 +70,11 @@ use crate::detect::{Rule, arp_spoof};
 pub struct FileConfig {
     pub capture: CaptureSection,
     pub rules: RulesSection,
+    /// Fichier où chaque section de règle a été définie (rempli par `load`,
+    /// jamais lu dans le TOML) : sert à détecter les doublons et à afficher
+    /// d'où vient la configuration de chaque règle.
+    #[serde(skip)]
+    pub origins: BTreeMap<&'static str, PathBuf>,
 }
 
 /// Section `[capture]`.
@@ -110,10 +121,12 @@ struct IncludedRules {
 pub struct ArpSpoofSection {
     pub enabled: bool,
     pub severity: Severity,
-    pub binding_ttl_secs: u64,
+    /// `NonZeroU64` : la valeur 0 est refusée dès la lecture du fichier.
+    pub binding_ttl_secs: NonZeroU64,
     pub request_window_secs: u64,
     pub alert_cooldown_secs: u64,
-    pub max_entries: usize,
+    /// `NonZeroUsize` : une table de taille 0 est refusée dès la lecture.
+    pub max_entries: NonZeroUsize,
     /// Associations de confiance : `"IP" = "MAC"`.
     pub trusted: BTreeMap<Ipv4Addr, MacAddr>,
 }
@@ -126,10 +139,15 @@ impl Default for ArpSpoofSection {
         ArpSpoofSection {
             enabled: true,
             severity: rule.severity,
-            binding_ttl_secs: rule.binding_ttl.as_secs(),
+            // Les valeurs par défaut de la règle sont des constantes non
+            // nulles : un test (`un_fichier_vide_donne_les_valeurs_par_defaut`)
+            // garantit que ces conversions ne peuvent pas échouer.
+            binding_ttl_secs: NonZeroU64::new(rule.binding_ttl.as_secs())
+                .expect("TTL par défaut non nul"),
             request_window_secs: rule.request_window.as_secs(),
             alert_cooldown_secs: rule.alert_cooldown.as_secs(),
-            max_entries: rule.max_entries,
+            max_entries: NonZeroUsize::new(rule.max_entries)
+                .expect("taille de table par défaut non nulle"),
             trusted: rule.trusted,
         }
     }
@@ -145,12 +163,6 @@ impl TryFrom<&ArpSpoofSection> for arp_spoof::Config {
                 "[rules.arp_spoofing] {key} : {why}"
             )))
         };
-        if section.binding_ttl_secs == 0 {
-            return invalid("binding_ttl_secs", "doit être supérieur à 0");
-        }
-        if section.max_entries == 0 {
-            return invalid("max_entries", "doit être supérieur à 0");
-        }
         if section.trusted.keys().any(Ipv4Addr::is_unspecified) {
             return invalid(
                 "trusted",
@@ -159,10 +171,10 @@ impl TryFrom<&ArpSpoofSection> for arp_spoof::Config {
         }
         Ok(arp_spoof::Config {
             severity: section.severity,
-            binding_ttl: Duration::from_secs(section.binding_ttl_secs),
+            binding_ttl: Duration::from_secs(section.binding_ttl_secs.get()),
             request_window: Duration::from_secs(section.request_window_secs),
             alert_cooldown: Duration::from_secs(section.alert_cooldown_secs),
-            max_entries: section.max_entries,
+            max_entries: section.max_entries.get(),
             trusted: section.trusted.clone(),
         })
     }
@@ -243,7 +255,7 @@ impl FileConfig {
 
         // Où chaque section a été définie, pour nommer les deux fichiers en
         // cas de doublon. On commence par les sections du fichier principal.
-        let mut origins: BTreeMap<&'static str, PathBuf> = BTreeMap::new();
+        let mut origins = BTreeMap::new();
         if config.rules.arp_spoofing.is_some() {
             origins.insert("arp_spoofing", path.to_path_buf());
         }
@@ -266,6 +278,7 @@ impl FileConfig {
             config.merge_included(file.rules, &included, &mut origins)?;
             seen.push(included);
         }
+        config.origins = origins;
         Ok(config)
     }
 
@@ -291,15 +304,43 @@ impl FileConfig {
         )
     }
 
-    /// Construit les règles actives, dans un ordre fixe.
+    /// Valide la configuration de TOUTES les règles (activées ou non), puis
+    /// construit les règles actives, dans un ordre fixe.
     pub fn rules(&self) -> Result<Vec<Box<dyn Rule>>, ConfigError> {
         let mut rules: Vec<Box<dyn Rule>> = Vec::new();
         let arp = self.rules.arp_spoofing.clone().unwrap_or_default();
+        // Validée AVANT de regarder `enabled` : une règle désactivée mais
+        // invalide est signalée dès aujourd'hui, pas le jour de sa réactivation.
+        let config = arp_spoof::Config::try_from(&arp)?;
         if arp.enabled {
-            let config = arp_spoof::Config::try_from(&arp)?;
             rules.push(Box::new(arp_spoof::ArpSpoof::new(config)));
         }
         Ok(rules)
+    }
+
+    /// Une ligne par règle connue : son état et l'origine de sa
+    /// configuration. Affiché au démarrage, pour que personne ne croie une
+    /// règle désactivée alors qu'elle tourne avec ses valeurs par défaut
+    /// (cas d'un fichier retiré de la liste `files`).
+    pub fn rules_summary(&self) -> Vec<String> {
+        let mut lines = Vec::new();
+        let arp = self.rules.arp_spoofing.clone().unwrap_or_default();
+        lines.push(describe_rule(
+            arp_spoof::RULE_ID,
+            arp.enabled,
+            self.origins.get("arp_spoofing"),
+        ));
+        lines
+    }
+}
+
+/// « ARP-001 : active (rules/arp_spoofing.toml) », « … active (valeurs par
+/// défaut) » ou « … désactivée (…) ».
+fn describe_rule(id: &str, enabled: bool, origin: Option<&PathBuf>) -> String {
+    let state = if enabled { "active" } else { "désactivée" };
+    match origin {
+        Some(path) => format!("{id} : {state} ({})", path.display()),
+        None => format!("{id} : {state} (valeurs par défaut)"),
     }
 }
 
@@ -435,18 +476,65 @@ mod tests {
     }
 
     #[test]
-    fn des_valeurs_incoherentes_sont_refusees() {
-        for text in [
-            "[rules.arp_spoofing]\nbinding_ttl_secs = 0\n",
-            "[rules.arp_spoofing]\nmax_entries = 0\n",
-            "[rules.arp_spoofing.trusted]\n\"0.0.0.0\" = \"00:00:5e:00:53:01\"\n",
+    fn une_valeur_nulle_est_refusee_des_la_lecture_avec_sa_position() {
+        for (texte, cle) in [
+            ("[rules.arp_spoofing]\nbinding_ttl_secs = 0\n", "nonzero"),
+            ("[rules.arp_spoofing]\nmax_entries = 0\n", "nonzero"),
         ] {
-            let config = FileConfig::parse(text).unwrap();
-            assert!(
-                matches!(config.rules(), Err(ConfigError::Invalid(_))),
-                "accepté à tort : {text}"
-            );
+            let message = erreur(texte);
+            assert!(message.contains(cle), "{message}");
+            assert!(message.contains("line 2"), "{message}");
         }
+    }
+
+    #[test]
+    fn une_association_de_confiance_sur_0_0_0_0_est_refusee() {
+        let config = FileConfig::parse(
+            "[rules.arp_spoofing.trusted]\n\"0.0.0.0\" = \"00:00:5e:00:53:01\"\n",
+        )
+        .unwrap();
+        assert!(matches!(config.rules(), Err(ConfigError::Invalid(_))));
+    }
+
+    #[test]
+    fn une_regle_desactivee_est_quand_meme_validee() {
+        // Désactivée ET invalide : l'erreur est signalée dès maintenant.
+        let config = FileConfig::parse(
+            "[rules.arp_spoofing]\nenabled = false\n\n[rules.arp_spoofing.trusted]\n\"0.0.0.0\" = \"00:00:5e:00:53:01\"\n",
+        )
+        .unwrap();
+        assert!(matches!(config.rules(), Err(ConfigError::Invalid(_))));
+        // Et une valeur nulle, même désactivée, ne passe pas la lecture.
+        assert!(
+            FileConfig::parse("[rules.arp_spoofing]\nenabled = false\nbinding_ttl_secs = 0\n")
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn le_resume_indique_l_origine_de_chaque_regle() {
+        // Sans fichier : valeurs par défaut.
+        assert_eq!(
+            FileConfig::default().rules_summary(),
+            ["ARP-001 : active (valeurs par défaut)"]
+        );
+        // Avec un fichier inclus, désactivée.
+        let dir = dossier(
+            "resume",
+            &[
+                ("rwatch.toml", PRINCIPAL),
+                ("rules/arp.toml", "[rules.arp_spoofing]\nenabled = false\n"),
+            ],
+        );
+        let config = FileConfig::load(&dir.join("rwatch.toml")).unwrap();
+        let resume = config.rules_summary();
+        assert_eq!(resume.len(), 1);
+        assert!(
+            resume[0].starts_with("ARP-001 : désactivée (")
+                && resume[0].ends_with("rules/arp.toml)"),
+            "{resume:?}"
+        );
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -497,7 +585,10 @@ mod tests {
         // Lancé depuis n'importe quel répertoire courant : seul compte
         // l'emplacement du fichier principal.
         let config = FileConfig::load(&dir.join("rwatch.toml")).unwrap();
-        assert_eq!(config.rules.arp_spoofing.unwrap().binding_ttl_secs, 600);
+        assert_eq!(
+            config.rules.arp_spoofing.unwrap().binding_ttl_secs.get(),
+            600
+        );
         std::fs::remove_dir_all(dir).unwrap();
     }
 

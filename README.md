@@ -185,7 +185,23 @@ au démarrage :
 - une même règle ne peut être configurée que dans un seul fichier ; un doublon
   est signalé avec les deux fichiers en cause ;
 - un fichier de règle ne contient que des sections `[rules.*]`, et ne peut pas
-  en inclure d'autres.
+  en inclure d'autres ;
+- toutes les règles sont validées, y compris les règles désactivées : une
+  configuration invalide n'attend pas la réactivation d'une règle pour être
+  découverte.
+
+Au démarrage, rwatch affiche l'état de chaque règle et l'origine de sa
+configuration :
+
+```console
+[*] Configuration : /etc/rwatch/rwatch.toml
+[*] ARP-001 : active (/etc/rwatch/rules/arp_spoofing.toml)
+```
+
+Pour désactiver une règle, écrivez `enabled = false` dans son fichier. Retirer
+le fichier de la liste ne la désactive pas : la règle tourne alors avec ses
+valeurs par défaut, sans ses associations de confiance, ce que le résumé de
+démarrage rend visible (`ARP-001 : active (valeurs par défaut)`).
 
 Une faute de frappe n'est jamais ignorée en silence :
 
