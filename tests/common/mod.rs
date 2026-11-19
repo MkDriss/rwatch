@@ -126,6 +126,80 @@ pub fn tcp_data(from: Host, to: Host, dst_port: u16, payload: &[u8]) -> Vec<u8> 
 }
 
 // ===========================================================================
+// Sessions MQTT (pour les tests de la couche MQTT)
+// ===========================================================================
+
+/// Construit une trame TCP (Ethernet/IPv4) de `from` vers `to`:`dst_port`,
+/// avec le numéro de séquence et le payload donnés. SYN si `syn`.
+fn tcp_segment(
+    from: Host,
+    to: Host,
+    dst_port: u16,
+    src_port: u16,
+    seq: u32,
+    syn: bool,
+    payload: &[u8],
+) -> Vec<u8> {
+    let mut b = PacketBuilder::ethernet2(from.1, to.1)
+        .ipv4(from.0, to.0, 64)
+        .tcp(src_port, dst_port, seq, 65_535);
+    if syn {
+        b = b.syn();
+    } else {
+        b = b.ack(1);
+    }
+    if !payload.is_empty() {
+        b = b.psh();
+    }
+    let mut frame = Vec::with_capacity(b.size(payload.len()));
+    b.write(&mut frame, payload).expect("écriture en mémoire");
+    frame
+}
+
+/// Un CONNECT MQTT 3.1.1 minimal portant `client_id` (pas d'auth, clean session).
+pub fn mqtt_connect(client_id: &str) -> Vec<u8> {
+    let id = client_id.as_bytes();
+    let mut variable = vec![0x00, 0x04, b'M', b'Q', b'T', b'T', 0x04, 0x02, 0x00, 0x3c];
+    variable.extend_from_slice(&(id.len() as u16).to_be_bytes());
+    variable.extend_from_slice(id);
+    let mut pkt = vec![0x10];
+    pkt.push(variable.len() as u8); // remaining length (client_id court => 1 octet)
+    pkt.extend_from_slice(&variable);
+    pkt
+}
+
+/// Une connexion d'un client (`from`, port `src_port`) vers le broker sur 1883 :
+/// SYN, puis un CONNECT portant `client_id`. Deux trames, horodatées à partir
+/// de `t` (secondes), à 1 ms d'intervalle.
+pub fn mqtt_session(
+    from: Host,
+    broker: Host,
+    src_port: u16,
+    client_id: &str,
+    t: f64,
+) -> Vec<(Duration, Vec<u8>)> {
+    let base = DEFAULT_START + Duration::from_millis((t * 1000.0) as u64);
+    vec![
+        (
+            base,
+            tcp_segment(from, broker, 1883, src_port, 1000, true, b""),
+        ),
+        (
+            base + Duration::from_millis(1),
+            tcp_segment(
+                from,
+                broker,
+                1883,
+                src_port,
+                1001,
+                false,
+                &mqtt_connect(client_id),
+            ),
+        ),
+    ]
+}
+
+// ===========================================================================
 // Scénarios
 // ===========================================================================
 

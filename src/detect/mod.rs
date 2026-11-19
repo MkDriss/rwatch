@@ -19,11 +19,13 @@
 //! jour où ce besoin apparaîtra.
 
 pub mod arp_spoof;
+pub mod mqtt_impersonation;
 
 use std::time::Duration;
 
 use crate::alert::Alert;
 use crate::decode::Frame;
+use crate::mqtt::MqttEvent;
 
 /// Une règle de détection.
 ///
@@ -34,9 +36,28 @@ pub trait Rule {
     /// Identifiant stable de la règle, repris dans le champ `rule_id`.
     fn id(&self) -> &'static str;
 
+    /// `true` si la règle consomme des événements MQTT (`on_mqtt`). Le moteur
+    /// s'en sert pour n'activer le décodage MQTT que si nécessaire. Par
+    /// défaut `false` : une règle ne regardant que les trames.
+    fn needs_mqtt(&self) -> bool {
+        false
+    }
+
     /// Examine une trame capturée à l'instant `ts` ; renvoie les alertes
     /// levées (le plus souvent aucune : un `Vec` vide n'alloue rien).
-    fn on_frame(&mut self, ts: Duration, frame: &Frame<'_>) -> Vec<Alert>;
+    ///
+    /// Corps par défaut vide : une règle qui ne regarde que le MQTT l'ignore.
+    fn on_frame(&mut self, _ts: Duration, _frame: &Frame<'_>) -> Vec<Alert> {
+        Vec::new()
+    }
+
+    /// Examine un événement MQTT (CONNECT…) capturé à l'instant `ts`.
+    ///
+    /// Corps par défaut vide : une règle qui ne regarde que les trames
+    /// (ARP, TCP) l'ignore.
+    fn on_mqtt(&mut self, _ts: Duration, _event: &MqttEvent<'_>) -> Vec<Alert> {
+        Vec::new()
+    }
 }
 
 /// Le moteur de détection : une liste de règles hétérogènes.
@@ -54,6 +75,11 @@ impl Engine {
         self.rules.iter().map(|rule| rule.id()).collect()
     }
 
+    /// Vrai si au moins une règle active consomme des événements MQTT.
+    pub fn needs_mqtt(&self) -> bool {
+        self.rules.iter().any(|rule| rule.needs_mqtt())
+    }
+
     /// Confie la trame à chaque règle, dans l'ordre, et renvoie toutes les
     /// alertes levées. L'ordre des règles étant fixe, l'ordre des alertes
     /// l'est aussi.
@@ -61,6 +87,15 @@ impl Engine {
         let mut alerts = Vec::new();
         for rule in &mut self.rules {
             alerts.extend(rule.on_frame(ts, frame));
+        }
+        alerts
+    }
+
+    /// Confie un événement MQTT à chaque règle, dans l'ordre.
+    pub fn on_mqtt(&mut self, ts: Duration, event: &MqttEvent<'_>) -> Vec<Alert> {
+        let mut alerts = Vec::new();
+        for rule in &mut self.rules {
+            alerts.extend(rule.on_mqtt(ts, event));
         }
         alerts
     }

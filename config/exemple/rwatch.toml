@@ -24,4 +24,5 @@
 # dans son fichier. Une règle sans fichier tourne avec ses valeurs par défaut.
 files = [
     "rules/arp_spoofing.toml",
+    "rules/mqtt_impersonation.toml",
 ]

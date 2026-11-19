@@ -41,6 +41,23 @@ question de la visibilité disparaît, et l'empoisonnement ARP entre stations
 devient impossible au niveau 2 (une mesure de prévention, hors du rôle de
 rwatch).
 
+### Règle MQTT-001 (usurpation d'identité MQTT)
+
+- Si l'attaquant se connecte AVANT l'objet légitime et qu'aucune association de
+  confiance n'existe pour ce Client ID, l'identité de l'attaquant est apprise,
+  et c'est le retour de l'objet légitime qui est signalé. Les associations de
+  confiance éliminent ce cas (recommandées pour les objets critiques ; dans le
+  labo, l'actionneur est déclaré de confiance avec `learn = false`).
+- Un objet légitime qui change de MAC sans association de confiance produit un
+  faux positif. Pas de péremption : un Client ID est une identité applicative
+  stable (codée en dur dans le firmware).
+- En mode appris, l'identité comparée est la MAC seule : un attaquant qui usurpe
+  aussi la MAC n'est pas vu par MQTT-001. C'est ARP-001 qui détecte alors
+  l'usurpation de MAC : les deux règles se complètent.
+- La table Client ID → MAC de cette règle et la table IP → MAC de la couche
+  MQTT font double emploi avec celle d'ARP-001 (voir ci-dessous, contexte
+  partagé).
+
 ### Moteur de détection
 
 - **Pas de contexte partagé entre les règles.** Chaque règle possède son propre

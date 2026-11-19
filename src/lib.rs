@@ -10,6 +10,7 @@
 //! Modules, de la trame à l'alerte :
 //! - [`capture`] : boucle de lecture des trames (interface ou fichier `.pcap`) ;
 //! - [`decode`] : classe chaque trame (ARP, segment TCP, autre) ;
+//! - [`mqtt`] : réassemblage et décodage MQTT (via rnifler), événements MQTT ;
 //! - [`detect`] : moteur et règles de détection ;
 //! - [`alert`] : l'alerte émise, conforme au contrat JSON ;
 //! - [`config`] : lecture du fichier de configuration (TOML) ;
@@ -20,4 +21,5 @@ pub mod capture;
 pub mod config;
 pub mod decode;
 pub mod detect;
+pub mod mqtt;
 pub mod silence;

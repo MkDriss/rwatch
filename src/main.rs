@@ -18,8 +18,9 @@ use clap::Parser;
 use pcap::{Activated, Capture};
 use rwatch::capture;
 use rwatch::config::FileConfig;
-use rwatch::decode::{self, Arp, ArpOp, Content, Frame};
+use rwatch::decode::{self, Arp, ArpOp, Content, Frame, Ipv4Sender};
 use rwatch::detect::Engine;
+use rwatch::mqtt::{MqttDecoder, MqttEvent, MqttPacket};
 
 /// Filtre BPF utilisé si ni la ligne de commande ni le fichier de
 /// configuration n'en donnent un : l'ARP et tout le trafic IP, qui sert aussi
@@ -114,6 +115,11 @@ fn run_cli() -> Result<(), Box<dyn Error>> {
     if engine.rule_ids().is_empty() {
         eprintln!("[!] Aucune règle active : rwatch ne lèvera aucune alerte");
     }
+    // Décodage MQTT : si une règle MQTT en a besoin, ou si la config le force.
+    let decode_mqtt = engine.needs_mqtt() || config.capture.decode_mqtt;
+    if decode_mqtt {
+        eprintln!("[*] Décodage MQTT actif");
+    }
 
     // Les deux branches ouvrent un type de capture DIFFÉRENT
     // (`Capture<Offline>` / `Capture<Active>`) : chacune appelle donc `run`,
@@ -125,7 +131,7 @@ fn run_cli() -> Result<(), Box<dyn Error>> {
                 path.display()
             );
             let cap = rnifler::capture::open_offline(path, &filter)?;
-            run(cap, engine, &args)
+            run(cap, engine, decode_mqtt, &args)
         }
         (None, Some(interface)) => {
             let mode = if config.capture.promiscuous {
@@ -139,7 +145,7 @@ fn run_cli() -> Result<(), Box<dyn Error>> {
             let mut options = rnifler::capture::LiveOptions::default();
             options.promiscuous = config.capture.promiscuous;
             let cap = rnifler::capture::open_live_with(interface, &filter, options)?;
-            run(cap, engine, &args)
+            run(cap, engine, decode_mqtt, &args)
         }
         // Impossible : clap exige --interface quand --read est absent.
         (None, None) => unreachable!("clap impose --interface ou --read"),
@@ -150,8 +156,12 @@ fn run_cli() -> Result<(), Box<dyn Error>> {
 fn run<T: Activated + ?Sized>(
     cap: Capture<T>,
     mut engine: Engine,
+    decode_mqtt: bool,
     args: &Args,
 ) -> Result<(), Box<dyn Error>> {
+    // L'analyseur MQTT n'est créé que si quelqu'un en a besoin (règle MQTT ou
+    // decode_mqtt) : pas de réassemblage TCP inutile sinon.
+    let mut mqtt = decode_mqtt.then(MqttDecoder::new);
     let mut out = io::stdout().lock();
     let mut stats = Stats::default();
     // Horodatage de la première trame : les temps de --verbose lui sont relatifs.
@@ -172,11 +182,39 @@ fn run<T: Activated + ?Sized>(
                 describe(elapsed, &frame);
             }
             for alert in engine.on_frame(ts, &frame) {
-                stats.alerts += 1;
-                // Une alerte = une ligne de JSON. `to_writer` écrit
-                // directement dans stdout, sans chaîne intermédiaire.
-                serde_json::to_writer(&mut out, &alert)?;
-                writeln!(out)?;
+                emit(&mut out, &mut stats, &alert)?;
+            }
+            // Décodage MQTT : on confie les segments TCP à l'analyseur. Les
+            // événements sont COPIÉS dans un Vec (ils empruntent le buffer du
+            // paquet ; on en a besoin après, hors de la closure, pour appeler
+            // le moteur et écrire — ce que la closure ne peut pas faire).
+            if let (Some(mqtt), Content::Tcp(seg), Some(sender)) =
+                (mqtt.as_mut(), &frame.content, frame.ipv4_sender)
+            {
+                let mut connects: Vec<(Ipv4Sender, String)> = Vec::new();
+                mqtt.process(seg, sender, ts, |event| {
+                    let MqttPacket::Connect { client_id } = event.packet;
+                    connects.push((event.source, client_id.to_string()));
+                });
+                for (source, client_id) in connects {
+                    if args.verbose {
+                        eprintln!(
+                            "[{}] MQTT CONNECT client_id={client_id:?} depuis {} ({})",
+                            format_time(ts.saturating_sub(*start.get_or_insert(ts))),
+                            source.ip,
+                            source.mac
+                        );
+                    }
+                    let event = MqttEvent {
+                        source,
+                        packet: MqttPacket::Connect {
+                            client_id: &client_id,
+                        },
+                    };
+                    for alert in engine.on_mqtt(ts, &event) {
+                        emit(&mut out, &mut stats, &alert)?;
+                    }
+                }
             }
             Ok(())
         })?;
@@ -187,9 +225,21 @@ fn run<T: Activated + ?Sized>(
     Ok(())
 }
 
+/// Écrit une alerte en JSON (une ligne) sur stdout et compte.
+fn emit(out: &mut impl Write, stats: &mut Stats, alert: &rwatch::alert::Alert) -> io::Result<()> {
+    stats.alerts += 1;
+    serde_json::to_writer(&mut *out, alert)?;
+    writeln!(out)
+}
+
+/// Temps relatif formaté (secondes.microsecondes).
+fn format_time(elapsed: Duration) -> String {
+    format!("{:>11.6}", elapsed.as_secs_f64())
+}
+
 /// Mode --verbose : une ligne lisible par trame ARP ou SYN, sur stderr.
 fn describe(elapsed: Duration, frame: &Frame<'_>) {
-    let time = format!("{:>11.6}", elapsed.as_secs_f64());
+    let time = format_time(elapsed);
     match &frame.content {
         Content::Arp(arp) => eprintln!("[{time}] {}", describe_arp(arp)),
         // SYN sans ACK = premier paquet d'une connexion.

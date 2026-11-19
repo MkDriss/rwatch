@@ -57,8 +57,8 @@ use std::time::Duration;
 use serde::Deserialize;
 
 use crate::alert::Severity;
-use crate::decode::MacAddr;
-use crate::detect::{Rule, arp_spoof};
+use crate::decode::{Ipv4Sender, MacAddr};
+use crate::detect::{Rule, arp_spoof, mqtt_impersonation};
 
 // ===========================================================================
 // Format du fichier
@@ -88,6 +88,11 @@ pub struct CaptureSection {
     /// Activé par défaut : un IDS doit voir tout ce que son interface peut
     /// lui montrer.
     pub promiscuous: bool,
+    /// Force le décodage MQTT (réassemblage TCP + décodage des paquets), même
+    /// si aucune règle MQTT n'est active. Utile pour observer les CONNECT en
+    /// --verbose. Le décodage est de toute façon activé dès qu'une règle MQTT
+    /// est configurée.
+    pub decode_mqtt: bool,
 }
 
 /// Écrit à la main (et non dérivé) : le défaut de `promiscuous` est `true`,
@@ -97,6 +102,7 @@ impl Default for CaptureSection {
         CaptureSection {
             filter: None,
             promiscuous: true,
+            decode_mqtt: false,
         }
     }
 }
@@ -112,6 +118,7 @@ pub struct RulesSection {
     /// inclus la définit). Distinguer « absente » de « présente avec les
     /// valeurs par défaut » permet de détecter les doublons.
     pub arp_spoofing: Option<ArpSpoofSection>,
+    pub mqtt_impersonation: Option<MqttImpersonationSection>,
 }
 
 /// Un fichier de règles inclus : uniquement des sections `[rules.*]`.
@@ -128,6 +135,7 @@ struct IncludedFile {
 #[serde(default, deny_unknown_fields)]
 struct IncludedRules {
     arp_spoofing: Option<ArpSpoofSection>,
+    mqtt_impersonation: Option<MqttImpersonationSection>,
 }
 
 /// Section `[rules.arp_spoofing]`. Les durées sont en secondes, et le nom
@@ -192,6 +200,74 @@ impl TryFrom<&ArpSpoofSection> for arp_spoof::Config {
             alert_cooldown: Duration::from_secs(section.alert_cooldown_secs),
             max_entries: section.max_entries.get(),
             trusted: section.trusted.clone(),
+        })
+    }
+}
+
+/// Une identité réseau dans la configuration : `{ ip = "...", mac = "..." }`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NetworkIdentity {
+    pub ip: Ipv4Addr,
+    pub mac: MacAddr,
+}
+
+/// Section `[rules.mqtt_impersonation]`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct MqttImpersonationSection {
+    pub enabled: bool,
+    pub severity: Severity,
+    /// Apprendre les Client ID inconnus ; `false` = inventaire fixe.
+    pub learn: bool,
+    pub alert_cooldown_secs: u64,
+    pub max_entries: usize,
+    /// Client ID → identité attendue.
+    pub trusted: BTreeMap<String, NetworkIdentity>,
+}
+
+impl Default for MqttImpersonationSection {
+    fn default() -> Self {
+        let rule = mqtt_impersonation::Config::default();
+        MqttImpersonationSection {
+            enabled: true,
+            severity: rule.severity,
+            learn: rule.learn,
+            alert_cooldown_secs: rule.alert_cooldown.as_secs(),
+            max_entries: rule.max_entries,
+            trusted: BTreeMap::new(),
+        }
+    }
+}
+
+impl TryFrom<&MqttImpersonationSection> for mqtt_impersonation::Config {
+    type Error = ConfigError;
+
+    fn try_from(section: &MqttImpersonationSection) -> Result<Self, Self::Error> {
+        if section.max_entries == 0 {
+            return Err(ConfigError::Invalid(
+                "[rules.mqtt_impersonation] max_entries : doit être supérieur à 0".to_string(),
+            ));
+        }
+        let trusted = section
+            .trusted
+            .iter()
+            .map(|(id, ident)| {
+                (
+                    id.clone(),
+                    Ipv4Sender {
+                        ip: ident.ip,
+                        mac: ident.mac,
+                    },
+                )
+            })
+            .collect();
+        Ok(mqtt_impersonation::Config {
+            severity: section.severity,
+            learn: section.learn,
+            alert_cooldown: Duration::from_secs(section.alert_cooldown_secs),
+            max_entries: section.max_entries,
+            trusted,
         })
     }
 }
@@ -275,6 +351,9 @@ impl FileConfig {
         if config.rules.arp_spoofing.is_some() {
             origins.insert("arp_spoofing", path.to_path_buf());
         }
+        if config.rules.mqtt_impersonation.is_some() {
+            origins.insert("mqtt_impersonation", path.to_path_buf());
+        }
 
         // Les chemins relatifs partent du dossier du fichier principal.
         // (`Path::join` avec un chemin absolu renvoie ce chemin absolu.)
@@ -317,6 +396,13 @@ impl FileConfig {
             included.arp_spoofing,
             from,
             origins,
+        )?;
+        merge_section(
+            "mqtt_impersonation",
+            &mut self.rules.mqtt_impersonation,
+            included.mqtt_impersonation,
+            from,
+            origins,
         )
     }
 
@@ -330,6 +416,12 @@ impl FileConfig {
         let config = arp_spoof::Config::try_from(&arp)?;
         if arp.enabled {
             rules.push(Box::new(arp_spoof::ArpSpoof::new(config)));
+        }
+
+        let mqtt = self.rules.mqtt_impersonation.clone().unwrap_or_default();
+        let config = mqtt_impersonation::Config::try_from(&mqtt)?;
+        if mqtt.enabled {
+            rules.push(Box::new(mqtt_impersonation::MqttImpersonation::new(config)));
         }
         Ok(rules)
     }
@@ -345,6 +437,12 @@ impl FileConfig {
             arp_spoof::RULE_ID,
             arp.enabled,
             self.origins.get("arp_spoofing"),
+        ));
+        let mqtt = self.rules.mqtt_impersonation.clone().unwrap_or_default();
+        lines.push(describe_rule(
+            mqtt_impersonation::RULE_ID,
+            mqtt.enabled,
+            self.origins.get("mqtt_impersonation"),
         ));
         lines
     }
@@ -401,6 +499,7 @@ fn merge_section<T>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::net::Ipv4Addr;
 
     /// Le message d'une erreur d'analyse, pour vérifier ce qu'il explique.
     fn erreur(text: &str) -> String {
@@ -542,10 +641,13 @@ mod tests {
 
     #[test]
     fn le_resume_indique_l_origine_de_chaque_regle() {
-        // Sans fichier : valeurs par défaut.
+        // Sans fichier : les deux règles, valeurs par défaut.
         assert_eq!(
             FileConfig::default().rules_summary(),
-            ["ARP-001 : active (valeurs par défaut)"]
+            [
+                "ARP-001 : active (valeurs par défaut)",
+                "MQTT-001 : active (valeurs par défaut)",
+            ]
         );
         // Avec un fichier inclus, désactivée.
         let dir = dossier(
@@ -557,7 +659,7 @@ mod tests {
         );
         let config = FileConfig::load(&dir.join("rwatch.toml")).unwrap();
         let resume = config.rules_summary();
-        assert_eq!(resume.len(), 1);
+        assert_eq!(resume.len(), 2);
         assert!(
             resume[0].starts_with("ARP-001 : désactivée (")
                 && resume[0].ends_with("rules/arp.toml)"),
@@ -568,9 +670,17 @@ mod tests {
 
     #[test]
     fn une_regle_desactivee_n_est_pas_construite() {
+        // ARP désactivée : seule MQTT-001 reste.
         let config = FileConfig::parse("[rules.arp_spoofing]\nenabled = false\n").unwrap();
+        assert_eq!(config.rules().unwrap().len(), 1);
+        // Les deux désactivées : aucune règle.
+        let config = FileConfig::parse(
+            "[rules.arp_spoofing]\nenabled = false\n[rules.mqtt_impersonation]\nenabled = false\n",
+        )
+        .unwrap();
         assert!(config.rules().unwrap().is_empty());
-        assert_eq!(FileConfig::default().rules().unwrap().len(), 1);
+        // Par défaut : les deux.
+        assert_eq!(FileConfig::default().rules().unwrap().len(), 2);
     }
 
     #[test]
@@ -580,12 +690,12 @@ mod tests {
         // renommée dans le code…), ce test échoue. La doc ne peut pas dériver.
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("config/exemple/rwatch.toml");
         let config = FileConfig::load(&path).unwrap();
-        assert_eq!(config.rules.files.len(), 1);
+        assert_eq!(config.rules.files.len(), 2);
         assert!(
             config.rules.arp_spoofing.is_some(),
             "section incluse non lue"
         );
-        assert_eq!(config.rules().unwrap().len(), 1);
+        assert_eq!(config.rules().unwrap().len(), 2);
     }
 
     // --- Fichiers inclus ---------------------------------------------------

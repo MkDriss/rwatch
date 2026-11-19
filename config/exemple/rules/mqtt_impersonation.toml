@@ -1,0 +1,28 @@
+# MQTT-001 : usurpation d'identité MQTT par réutilisation d'un Client ID.
+#
+# Détecte un même Client ID MQTT revendiqué depuis deux identités réseau
+# différentes : le signe qu'un Client ID (souvent codé en dur dans un firmware
+# IoT, donc volable par rétro-ingénierie) a été réutilisé par un usurpateur.
+
+[rules.mqtt_impersonation]
+# enabled = true
+
+# Gravité des alertes : "low", "medium", "high" ou "critical".
+# severity = "high"
+
+# Apprendre les Client ID inconnus (true), ou ne suivre QUE ceux déclarés de
+# confiance ci-dessous (false, pour un inventaire fixe) ?
+# En mode appris, l'identité comparée est la MAC seule (l'IP peut changer via
+# DHCP) ; une association de confiance compare le couple (IP + MAC).
+# learn = true
+
+# Une seule alerte par période pour un même couple (Client ID, MAC usurpatrice).
+# alert_cooldown_secs = 60
+
+# Taille maximale des tables internes.
+# max_entries = 1024
+
+# Associations de confiance : Client ID -> identité réseau attendue.
+# L'adresse ci-dessous est réservée à la documentation (RFC 5737 / RFC 9542).
+[rules.mqtt_impersonation.trusted]
+"mon-objet" = { ip = "192.0.2.10", mac = "00:00:5e:00:53:10" }

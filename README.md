@@ -60,6 +60,8 @@ désigne l'attaquant, retrouvé grâce à sa MAC, sans jamais accuser la victime
   implémente un trait commun ; en ajouter une ne modifie pas le moteur.
 - **Règle ARP-001** : détection de l'usurpation d'adresse par empoisonnement de
   cache ARP (MITRE ATT&CK T1557.002).
+- **Règle MQTT-001** : détection de l'usurpation d'identité MQTT, un même Client
+  ID réutilisé depuis deux identités réseau (vol de Client ID codé en dur).
 - **Alertes JSON** conformes à un contrat stable, au format JSON Lines sur la
   sortie standard. Les messages destinés aux humains passent sur la sortie
   d'erreur : la sortie standard ne contient que des alertes.
@@ -89,6 +91,7 @@ désigne l'attaquant, retrouvé grâce à sa MAC, sans jamais accuser la victime
 | `detect` | Le trait `Rule`, le moteur `Engine`, et les règles (`arp_spoof`) |
 | `alert` | La struct `Alert`, traduction Rust du contrat JSON |
 | `config` | Lecture, fusion et validation des fichiers de configuration TOML |
+| `mqtt` | Réassemblage et décodage MQTT (via rnifler), événements MQTT |
 
 Le paquet contient une bibliothèque (`src/lib.rs`, toute la logique) et un
 binaire (`src/main.rs`, l'interface en ligne de commande). La capture libpcap, le
@@ -249,6 +252,24 @@ connue est toujours active (vue, en ARP ou en IPv4, depuis moins de
 Les limites connues de la règle, et la méthode pour régler `binding_ttl`, sont
 décrites dans [`docs/LIMITES.md`](docs/LIMITES.md).
 
+### MQTT-001 : usurpation d'identité MQTT
+
+Un Client ID MQTT identifie un client auprès du broker ; dans l'IoT, il est
+souvent codé en dur dans le firmware, donc volable par rétro-ingénierie.
+MQTT-001 détecte un même Client ID revendiqué depuis deux identités réseau
+différentes.
+
+- association de confiance (Client ID → IP + MAC) : toute autre identité est
+  une usurpation, dès la première connexion ;
+- association apprise (si `learn = true`) : le premier à revendiquer un Client
+  ID inconnu l'attache à sa MAC ; une autre MAC ensuite est une usurpation ;
+- `learn = false` : ne suivre que les Client ID déclarés (inventaire fixe) ;
+- comme ARP-001 : une contradiction ne remplace jamais l'association connue, le
+  fautif désigné est le nouveau venu, une seule alerte par période.
+
+Le décodage MQTT (réassemblage TCP + décodage des paquets, via rnifler) n'est
+activé que si une règle MQTT est configurée, ou si `decode_mqtt = true`.
+
 ## Contrat d'alerte
 
 Chaque alerte est un objet JSON sur une ligne :
@@ -314,7 +335,8 @@ trames forgées (vérification de la période anti-rafale).
 - [ ] Émission des alertes vers un endpoint HTTP configurable
 - [x] Validation en conditions réelles sur le labo (attaque ARP détectée, test de non-régression)
 - [ ] SCAN-001 : détection de scan de ports
-- [ ] Règles MQTT : usurpation de Client ID, débit de publication anormal
+- [x] MQTT-001 : usurpation de Client ID
+- [ ] MQTT-002 : débit de publication anormal
 - [ ] Déploiement sur Raspberry Pi (service systemd, privilèges minimaux)
 - [ ] Détection d'anomalies par apprentissage d'une référence (baseline)
 
