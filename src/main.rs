@@ -9,7 +9,7 @@
 //! - stderr : les messages destinés aux humains (`[*]`, `[!]`, `--verbose`).
 
 use std::error::Error;
-use std::io::{self, Write};
+use std::io;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::Duration;
@@ -20,6 +20,7 @@ use rwatch::capture;
 use rwatch::config::FileConfig;
 use rwatch::decode::{self, Arp, ArpOp, Content, Frame, Ipv4Sender};
 use rwatch::detect::Engine;
+use rwatch::emit::{Emitter, JsonLines, Sink};
 use rwatch::mqtt::{MqttDecoder, MqttEvent, MqttPacket};
 
 /// Filtre BPF utilisé si ni la ligne de commande ni le fichier de
@@ -162,7 +163,12 @@ fn run<T: Activated + ?Sized>(
     // L'analyseur MQTT n'est créé que si quelqu'un en a besoin (règle MQTT ou
     // decode_mqtt) : pas de réassemblage TCP inutile sinon.
     let mut mqtt = decode_mqtt.then(MqttDecoder::new);
-    let mut out = io::stdout().lock();
+
+    // Destinations d'alertes : stdout toujours actif. Le fil d'émission tourne
+    // à part pour qu'une destination lente ne bloque jamais la capture.
+    let sinks: Vec<Box<dyn Sink>> = vec![Box::new(JsonLines::new(io::stdout(), "stdout"))];
+    let (mut emitter, emit_handle) = Emitter::start(sinks);
+
     let mut stats = Stats::default();
     // Horodatage de la première trame : les temps de --verbose lui sont relatifs.
     let mut start: Option<Duration> = None;
@@ -182,7 +188,8 @@ fn run<T: Activated + ?Sized>(
                 describe(elapsed, &frame);
             }
             for alert in engine.on_frame(ts, &frame) {
-                emit(&mut out, &mut stats, &alert)?;
+                stats.alerts += 1;
+                emitter.send(alert);
             }
             // Décodage MQTT : on confie les segments TCP à l'analyseur. Les
             // événements sont COPIÉS dans un Vec (ils empruntent le buffer du
@@ -212,24 +219,28 @@ fn run<T: Activated + ?Sized>(
                         },
                     };
                     for alert in engine.on_mqtt(ts, &event) {
-                        emit(&mut out, &mut stats, &alert)?;
+                        stats.alerts += 1;
+                        emitter.send(alert);
                     }
                 }
             }
             Ok(())
         })?;
+
+    // Arrêt propre : libérer l'emitter ferme la file ; le fil d'émission la
+    // vide puis se termine. On attend qu'il ait fini d'écrire avant de quitter.
+    let dropped = emitter.dropped();
+    drop(emitter);
+    let emitted = emit_handle.join().expect("fil d'émission");
+
+    if dropped > 0 {
+        eprintln!("[!] {dropped} alerte(s) perdue(s) : file d'émission saturée");
+    }
     eprintln!(
-        "[*] {seen} trame(s) lue(s) : {} alerte(s), {} trame(s) malformée(s)",
+        "[*] {seen} trame(s) lue(s) : {} alerte(s) ({emitted} émise(s)), {} trame(s) malformée(s)",
         stats.alerts, stats.malformed
     );
     Ok(())
-}
-
-/// Écrit une alerte en JSON (une ligne) sur stdout et compte.
-fn emit(out: &mut impl Write, stats: &mut Stats, alert: &rwatch::alert::Alert) -> io::Result<()> {
-    stats.alerts += 1;
-    serde_json::to_writer(&mut *out, alert)?;
-    writeln!(out)
 }
 
 /// Temps relatif formaté (secondes.microsecondes).

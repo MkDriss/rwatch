@@ -1,10 +1,10 @@
 //! Test de non-régression sur une ATTAQUE RÉELLE.
 //!
 //! Contrairement à `tests/replay.rs`, dont les scénarios sont fabriqués en
-//! code, ce test rejoue une vraie capture : un empoisonnement ARP mené sur le
-//! laboratoire `sec-lab-iot` le 18 novembre 2026 (voir
-//! `tests/captures/README.md`). rwatch doit en tirer exactement les deux
-//! alertes attendues, aujourd'hui et à chaque modification future.
+//! code, ces tests rejouent de VRAIES captures d'attaques menées sur le
+//! laboratoire `sec-lab-iot` (voir `tests/captures/README.md`) : un
+//! empoisonnement ARP et une usurpation d'identité MQTT. rwatch doit en tirer
+//! exactement les alertes attendues, aujourd'hui et à chaque modification.
 //!
 //! Le test lance le BINAIRE, comme un utilisateur, avec la configuration du
 //! labo (associations de confiance). La comparaison est structurelle : chaque
@@ -33,14 +33,16 @@ fn lignes_json(texte: &str, origine: &str) -> Vec<Value> {
         .collect()
 }
 
-#[test]
-fn l_attaque_arp_reelle_produit_les_deux_alertes_attendues() {
+/// Rejoue la capture `base`.pcap avec la config `base`.toml (dans
+/// tests/captures/), par le BINAIRE, et compare aux alertes attendues de
+/// tests/expected/attaque/`base`.jsonl. `nb_attendu` fixe le nombre exact
+/// d'alertes (vérifie aussi l'absence d'alertes parasites).
+fn verifier(base: &str, nb_attendu: usize) {
     let dir = captures_dir();
-    let pcap = dir.join("attaque-arp-mitm.pcap");
-    let config = dir.join("attaque-arp-mitm.toml");
-    let attendu = dir.join("../expected/attaque/attaque-arp-mitm.jsonl");
+    let pcap = dir.join(format!("{base}.pcap"));
+    let config = dir.join(format!("{base}.toml"));
+    let attendu_path = dir.join(format!("../expected/attaque/{base}.jsonl"));
 
-    // Cargo fournit le chemin du binaire compilé aux tests d'intégration.
     let sortie = Command::new(env!("CARGO_BIN_EXE_rwatch"))
         .arg("--config")
         .arg(&config)
@@ -48,7 +50,6 @@ fn l_attaque_arp_reelle_produit_les_deux_alertes_attendues() {
         .arg(&pcap)
         .output()
         .expect("lancement de rwatch");
-
     assert!(
         sortie.status.success(),
         "rwatch a échoué : {}",
@@ -59,27 +60,39 @@ fn l_attaque_arp_reelle_produit_les_deux_alertes_attendues() {
         &String::from_utf8(sortie.stdout).expect("sortie en UTF-8"),
         "sortie de rwatch",
     );
-    let attendu_texte = std::fs::read_to_string(&attendu)
-        .unwrap_or_else(|e| panic!("{} illisible ({e})", attendu.display()));
-    let attendu = lignes_json(&attendu_texte, &attendu.display().to_string());
+    let attendu_texte = std::fs::read_to_string(&attendu_path)
+        .unwrap_or_else(|e| panic!("{} illisible ({e})", attendu_path.display()));
+    let attendu = lignes_json(&attendu_texte, &attendu_path.display().to_string());
 
-    // Deux alertes exactement : une rafale d'une quinzaine de paires de trames
-    // forgées ne doit en produire que deux (période anti-rafale d'ARP-001).
     assert_eq!(
         obtenu.len(),
-        2,
-        "attendu 2 alertes (anti-rafale), obtenu {} :\n{obtenu:#?}",
+        nb_attendu,
+        "{base} : attendu {nb_attendu} alerte(s), obtenu {} :\n{obtenu:#?}",
         obtenu.len()
     );
     for (i, (o, a)) in obtenu.iter().zip(&attendu).enumerate() {
         assert_eq!(
             o,
             a,
-            "alerte n°{} différente\n--- obtenu ---\n{}\n--- attendu ---\n{}",
+            "{base} : alerte n°{} différente\n--- obtenu ---\n{}\n--- attendu ---\n{}",
             i + 1,
             serde_json::to_string_pretty(o).unwrap(),
             serde_json::to_string_pretty(a).unwrap()
         );
     }
     assert_eq!(obtenu.len(), attendu.len());
+}
+
+#[test]
+fn attaque_arp_mitm() {
+    // Une quinzaine de paires de trames forgées → exactement 2 alertes
+    // (une par adresse usurpée) : vérifie aussi la période anti-rafale.
+    verifier("attaque-arp-mitm", 2);
+}
+
+#[test]
+fn attaque_mqtt_impersonation() {
+    // Six CONNECT (dont quatre à Client ID vide, ignorés) ; seul le
+    // dédoublement de "actionneur1" déclenche une alerte unique.
+    verifier("attaque-mqtt-impersonation", 1);
 }

@@ -29,3 +29,27 @@ vérifie la période anti-rafale d'ARP-001 (`alert_cooldown_secs`).
 La configuration utilisée pour rejouer la capture ci-dessus : les associations
 de confiance de la passerelle et de l'actionneur. Voir les commentaires du
 fichier.
+
+## `attaque-mqtt-impersonation.pcap`
+
+Capture RÉELLE de la phase MQTT de la même attaque (trafic du port 1883),
+menée sur le labo le 18 novembre 2026. Déroulé (visible avec
+`rwatch -C attaque-mqtt-impersonation.toml -r attaque-mqtt-impersonation.pcap -v`) :
+- l'actionneur légitime (`192.168.60.124`) se connecte au broker avec son
+  Client ID codé en dur `actionneur1` ;
+- 2 ms plus tard, le proxy de l'attaquant (`192.168.60.104`) se connecte avec
+  le MÊME `actionneur1` : le Client ID a été volé par rétro-ingénierie du
+  firmware ;
+- l'attaquant ouvre par ailleurs plusieurs connexions à Client ID vide, que
+  MQTT-001 ignore (un Client ID vide n'identifie personne).
+
+Rejouée avec `attaque-mqtt-impersonation.toml` (MQTT-001, `learn = false`,
+`actionneur1` de confiance), elle doit produire EXACTEMENT une alerte
+(`../expected/attaque/attaque-mqtt-impersonation.jsonl`) : l'usurpation de
+`actionneur1` par l'attaquant. Les connexions à Client ID vide ne produisent
+aucune alerte.
+
+## `attaque-mqtt-impersonation.toml`
+
+La configuration pour rejouer la capture MQTT : ARP-001 désactivée, MQTT-001
+sans apprentissage, `actionneur1` déclaré de confiance.

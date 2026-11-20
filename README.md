@@ -320,11 +320,12 @@ Après une modification **voulue** du comportement, les résultats attendus se
 régénèrent avec `RWATCH_BLESS=1 cargo test --test replay`, puis se relisent
 (`git diff tests/expected/`) avant d'être committés.
 
-Un test distinct, `tests/attaque_reelle.rs`, rejoue une CAPTURE RÉELLE : un
-empoisonnement ARP mené sur le laboratoire du projet (voir
-[`tests/captures/README.md`](tests/captures/README.md)). rwatch doit en tirer
-exactement les deux alertes attendues, et seulement deux malgré la rafale de
-trames forgées (vérification de la période anti-rafale).
+Un test distinct, `tests/attaque_reelle.rs`, rejoue deux CAPTURES RÉELLES
+d'attaques menées sur le laboratoire du projet (voir
+[`tests/captures/README.md`](tests/captures/README.md)) : un empoisonnement ARP
+(ARP-001, qui ne doit lever que deux alertes malgré la rafale de trames
+forgées) et une usurpation d'identité MQTT (MQTT-001, une seule alerte sur le
+dédoublement du Client ID, les connexions à Client ID vide étant ignorées).
 
 ## Feuille de route
 

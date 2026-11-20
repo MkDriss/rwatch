@@ -1,0 +1,15 @@
+# Configuration du TEST attaque_reelle (voir tests/attaque_reelle.rs).
+#
+# Reproduit la partie de la configuration du labo sec-lab-iot utile à ce test :
+# ARP-001 désactivée (la capture ne contient que du MQTT) et MQTT-001 sans
+# apprentissage, avec l'actionneur déclaré de confiance — le Client ID volé
+# "actionneur1" codé en dur dans son firmware.
+
+[rules.arp_spoofing]
+enabled = false
+
+[rules.mqtt_impersonation]
+learn = false
+
+[rules.mqtt_impersonation.trusted]
+"actionneur1" = { ip = "192.168.60.124", mac = "20:50:0d:29:e1:f0" }
